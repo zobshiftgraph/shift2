@@ -843,6 +843,7 @@
       </div>
     </div>
     <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
+    <button class="btn btn-ghost" onclick="copyBookmarklet()" id="bmBtn" title="Copy bookmarklet to clipboard so you can drag it to your bookmarks bar">🔖 Copy Bookmarklet</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
   </div>
 </header>
@@ -981,6 +982,39 @@
     e.currentTarget.classList.remove('dragging');
     document.querySelectorAll('.employee-row').forEach(r => r.classList.remove('drag-over'));
     _dragRowKey = null;
+  }
+
+  // ── Copy Bookmarklet ──
+  function copyBookmarklet() {
+    const code = `(function(){try{var L={'2030-10':[20,30,30,30],'0500-9':[5,0,14,0],'1200-9':[12,0,21,0],'1400-9':[14,0,23,0],'1600':[16,0,24,0],'0000':[0,0,32,0],'2230':[22,30,30,30],'0600':[6,0,14,0],'0600-10':[6,0,16,0],'0600-9':[6,0,15,0],'0700':[7,0,15,0],'0700-10':[7,0,17,0],'0700-9':[7,0,16,0],'0800':[8,0,16,0],'1100-10':[11,0,21,0],'1200-10':[12,0,22,0],'1300':[13,0,21,0],'1300-10':[13,0,23,0],'1400':[14,0,22,0],'1500':[15,0,23,0],'0900':[9,0,17,0],'0700F':[7,0,15,0],'0800-10':[8,0,18,0],'0800-9':[8,0,17,0],'0000F':[0,0,32,0],'2230F':[22,30,30,30],'0530-7':[5,30,12,30],'0600F':[6,0,14,0],'0800F':[8,0,16,0],'1000-7':[10,0,17,0],'1200':[12,0,20,0],'1300-7':[13,0,20,0],'1300-9':[13,0,22,0],'1300F':[13,0,21,0],'1400F':[14,0,22,0],'1500F':[15,0,23,0],'1600F':[16,0,24,0],'1430':[14,30,22,30],'0730':[7,30,15,30],'0830':[8,30,16,30],'0900-10':[9,0,19,0],'1000':[10,0,18,0],'1100-9':[11,0,20,0],'1400-7':[14,0,21,0],'0600-7':[6,0,13,0],'0700-7':[7,0,14,0],'1400-10':[14,0,24,0],'0800-7':[8,0,15,0],'1500-9':[15,0,24,0],'2300F':[23,0,31,0],'2300':[23,0,31,0],'0630':[6,30,14,30],'2200-9':[22,0,31,0],'2300-9':[23,0,32,0],'0900-7':[9,0,16,0],'1600-7':[16,0,23,0],'1700-9':[17,0,26,0],'2200-10':[22,0,32,0],'0900-9':[9,0,17,0],'1200-7':[12,0,19,0],'2230-9':[22,30,31,30],'0730-7':[7,30,14,30],'1500-7':[15,0,22,0],'1000-10':[10,0,20,0],'1000-9':[10,0,19,0],'1100':[11,0,19,0],'1330':[13,30,21,30],'0630-7':[6,30,13,30],'2230-7':[22,30,29,30],'1100-7':[11,0,18,0],'1700-7':[17,0,24,0],'1615':[16,15,24,15],'1615-7':[16,15,23,15],'1700':[17,0,25,0],'2130':[21,30,29,30],'0530':[5,30,13,30],'1100F':[11,0,19,0],'2200':[22,0,30,0],'2100-10':[21,0,31,0],'0630-9':[6,30,15,30],'1200F':[12,0,20,0],'0500-10':[5,0,15,0],'0530-9':[5,30,14,30],'0530-10':[5,30,15,30],'1130':[11,30,19,30],'1530':[15,30,23,30],'2330-7':[23,30,30,30],'2130-9':[21,30,30,30],'1600-9':[16,0,25,0],'2300-7':[23,0,30,0],'1215-10':[12,15,22,15],'0000-7':[0,0,31,0],'1430-7':[14,30,21,30],'0600-10F':[6,0,16,0],'0900-10F':[9,0,19,0],'0400':[4,0,12,0],'1200-10F':[12,0,22,0],'0900F':[9,0,17,0],'2230-10':[22,30,32,30],'0930-7':[9,30,16,30],'0930':[9,30,17,30],'0630-10':[6,30,16,30],'1330-10':[13,30,23,30],'1300-10F':[13,0,23,0],'0000-9':[0,0,33,0],'0800-10F':[8,0,18,0],'1100-10F':[11,0,21,0],'0430-10':[4,30,14,30],'1330-9':[13,30,22,30],'0700-10F':[7,0,17,0],'1130-10':[11,30,21,30],'1430-9':[14,30,23,30],'0600-7F':[6,0,13,0],'1630':[16,30,24,30],'2345':[23,45,31,45],'0930-10':[9,30,19,30],'2100-10F':[21,0,31,0],'0545-6':[5,45,11,45],'0830-10':[8,30,18,30],'2345F':[23,45,31,45],'1400-10F':[14,0,24,0],'0500-6':[5,0,11,0],'2245':[22,45,30,45],'2245-9':[22,45,31,45],'2245F':[22,45,30,45],'0545-7':[5,45,12,45],'0700ADMIN':[7,0,15,30],'0500':[5,0,13,0],'0545':[5,45,13,45],'2100':[21,0,29,0]};function shiftEndTime(code){var c=code.toUpperCase().replace(/^(@D|@T|@|C|T|D)/,'').replace(/(TMC|OM)[\$\^!]?$/,'').replace(/[\$\^!]$/,'').replace(/^AREA/,'').trim();if(L[c]){return L[c];}var nf=c.replace(/F$/,'');if(L[nf]){return L[nf];}return null;}var dateEl=document.getElementById('lblSelectedDate');if(!dateEl){alert('Not on WMT Worksheet View page.');return;}var dateText=dateEl.textContent.trim();var out='===DATE===\\n'+dateText+'\\n===SCHEDULE_START===\\n';var shiftTable=document.getElementById('ScheduledShifts');if(!shiftTable){alert('Could not find ScheduledShifts table.');return;}var rows=shiftTable.querySelectorAll('tr');for(var i=1;i<rows.length;i++){var tds=rows[i].querySelectorAll('td');if(tds.length<3)continue;var rawCode=tds[0].textContent.trim();if(!rawCode)continue;var names=[];var supLinks=tds[1].querySelectorAll('a');for(var s=0;s<supLinks.length;s++){var st=supLinks[s].textContent.trim().replace(/\\s+/g,'');if(st)names.push('('+st+')');}var cpcLinks=tds[2].querySelectorAll('a');for(var c=0;c<cpcLinks.length;c++){var ct=cpcLinks[c].textContent.trim().replace(/\\s+/g,'');if(ct)names.push(ct);}if(tds.length>3){var devLinks=tds[3].querySelectorAll('a');for(var d=0;d<devLinks.length;d++){var dt=devLinks[d].textContent.trim().replace(/\\s+/g,'');if(dt)names.push('<'+dt+'>');}}if(names.length>0)out+=rawCode+'\\n'+names.join(' ')+'\\n';}out+='===REQUESTS_START===\\n';out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';function parseReqTable(tblId){var tbl=document.getElementById(tblId);if(!tbl)return;var rs=tbl.querySelectorAll('tr');for(var i=1;i<rs.length;i++){var tds=rs[i].querySelectorAll('td');if(tds.length<6)continue;out+=tds[0].textContent.trim()+'\\t'+tds[1].textContent.trim()+'\\t'+tds[2].textContent.trim()+'\\t'+tds[3].textContent.trim()+'\\t'+tds[4].textContent.trim()+'\\t'+tds[5].textContent.trim()+'\\t'+(tds.length>6?tds[6].textContent.trim():'')+'\\t'+(tds.length>7?tds[7].textContent.trim():'')+'\\n';}}parseReqTable('tblShiftChange');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblXTECTE');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblSupRequests');navigator.clipboard.writeText(out).then(function(){},function(){alert('Clipboard access denied.');});}catch(e){alert('Bookmarklet error: '+e.message);}})();`;
+
+    const bookmarkletUrl = 'javascript:' + encodeURIComponent(code);
+    const btn = document.getElementById('bmBtn');
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(bookmarkletUrl).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copied!';
+        btn.style.color = 'var(--accent3)';
+        setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 2000);
+      }).catch(() => showBookmarkletDialog(bookmarkletUrl));
+    } else {
+      showBookmarkletDialog(bookmarkletUrl);
+    }
+  }
+
+  function showBookmarkletDialog(url) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:90%;max-width:560px;box-shadow:0 12px 40px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px;">🔖 Bookmarklet URL</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Select all and copy, then create a new bookmark in your browser and paste this as the URL.</div>
+      <textarea readonly onclick="this.select()" style="width:100%;height:100px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-mono);font-size:11px;padding:8px;resize:none;outline:none;">${url}</textarea>
+      <div style="margin-top:12px;text-align:right;"><button class="btn btn-ghost" onclick="this.closest('div[style*=fixed]').remove()">Close</button></div>
+    </div>`;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    setTimeout(() => overlay.querySelector('textarea').select(), 50);
   }
 
   // ── Fit rows to available height ──
