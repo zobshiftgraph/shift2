@@ -276,7 +276,10 @@
       margin-bottom: 3px;
       position: relative;
       height: var(--row-h, 36px);
+      transition: opacity 0.15s;
     }
+    .employee-row.dragging { opacity: 0.4; }
+    .employee-row.drag-over .bar-track { outline: 2px dashed #5b9bd5; border-radius: 6px; }
 
     .emp-label {
       position: absolute;
@@ -323,9 +326,10 @@
       align-items: center;
       justify-content: center;
       padding: 0 6px;
-      font-size: clamp(7px, 1vw, 11px);
-      font-weight: 500;
-      font-family: var(--font-mono);
+      font-size: 16px; /* overridden by fitRows inline style */
+      font-weight: 600;
+      font-family: var(--font-display);
+      letter-spacing: 0.1px;
       cursor: pointer;
       transition: filter 0.15s, transform 0.15s, box-shadow 0.15s;
       white-space: nowrap;
@@ -334,6 +338,7 @@
       min-width: 4px;
       user-select: none;
       box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.25);
     }
     .shift-bar:hover {
       filter: brightness(1.08);
@@ -724,7 +729,13 @@
     ">✕</button>
 
     <div id="modalName" style="font-size:18px;font-weight:700;margin-bottom:4px;"></div>
-    <div id="modalMeta" style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted);margin-bottom:16px;"></div>
+    <div id="modalMeta" style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted);margin-bottom:10px;"></div>
+
+    <!-- Trainee staffing toggle -->
+    <div id="modalStaffingCheck" style="display:none;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+      <input type="checkbox" id="countForStaffingCb" onchange="toggleCountForStaffing()" style="width:16px;height:16px;cursor:pointer;accent-color:#5b9bd5;"/>
+      <label for="countForStaffingCb" style="font-size:13px;font-weight:600;cursor:pointer;user-select:none;">Count for staffing</label>
+    </div>
 
     <div id="modalGaps" style="margin-bottom:16px;display:none;">
       <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:8px;">Time Between Shifts</div>
@@ -832,6 +843,7 @@
       </div>
     </div>
     <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
+    <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
   </div>
 </header>
 
@@ -886,12 +898,14 @@
   const schedulesByDate = {};
   // requestsByDate: { 'YYYY-MM-DD': [request, ...], ... }
   const requestsByDate = {};
+  // rowOrderByDate: { 'YYYY-MM-DD': ['rowKey1','rowKey2',...] } — manual drag order
+  const rowOrderByDate = {};
   let previewReqId = null; // request currently being visualized
   let colorMap = {};
   const BAR_COLOR = { bg: '#5b9bd5', text: '#fff' };
   const DEV_COLOR = { bg: '#7c5cbf', text: '#fff' };
   function getColor(shift) {
-    if (shift && shift.dev) return DEV_COLOR;
+    if (shift && shift.dev && !shift.countForStaffing) return DEV_COLOR;
     return BAR_COLOR;
   }
 
@@ -921,6 +935,54 @@
     btn.title = collapsed ? 'Show requests' : 'Hide requests';
   }
 
+  // ── Row drag-and-drop ──
+  let _dragRowKey = null;
+
+  function rowDragStart(e, rowKey) {
+    _dragRowKey = rowKey;
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.classList.add('dragging');
+  }
+
+  function rowDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.classList.add('drag-over');
+  }
+
+  function rowDragLeave(e) {
+    e.currentTarget.classList.remove('drag-over');
+  }
+
+  function rowDrop(e, targetRowKey) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    if (!_dragRowKey || _dragRowKey === targetRowKey) return;
+
+    const date = getActiveDate();
+    // Build current order from DOM
+    const rows = document.querySelectorAll('.employee-row[data-rowkey]');
+    const currentOrder = Array.from(rows).map(r => r.dataset.rowkey);
+
+    // Move dragRowKey to position of targetRowKey
+    const fromIdx = currentOrder.indexOf(_dragRowKey);
+    const toIdx   = currentOrder.indexOf(targetRowKey);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    currentOrder.splice(fromIdx, 1);
+    currentOrder.splice(toIdx, 0, _dragRowKey);
+    rowOrderByDate[date] = currentOrder;
+
+    render();
+    saveData();
+  }
+
+  function rowDragEnd(e) {
+    e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('.employee-row').forEach(r => r.classList.remove('drag-over'));
+    _dragRowKey = null;
+  }
+
   // ── Fit rows to available height ──
   function fitRows() {
     const chartBody = document.querySelector('.chart-body');
@@ -933,11 +995,12 @@
     // Reserve: time label row (22px) + count row (22px) + margins + padding
     const reserved = 22 + 22 + 8 + (3 * n) + 16;
     const remaining = available - reserved;
-    const rowH = Math.max(18, Math.min(52, Math.floor(remaining / n)));
+    const rowH = Math.max(20, Math.min(80, Math.floor(remaining / n)));
     container.style.setProperty('--row-h', rowH + 'px');
-    const barFontSize = Math.max(7, Math.min(11, Math.floor(rowH * 0.36)));
+    const barFontSize = Math.max(12, Math.floor(rowH * 0.75));
     container.querySelectorAll('.shift-bar').forEach(b => {
       b.style.fontSize = barFontSize + 'px';
+      b.style.fontWeight = '700';
     });
   }
 
@@ -1038,6 +1101,7 @@
   }
 
   function showPasteFeedback(btn, msg, isError) {
+    if (!msg) { btn.textContent = '📋 Paste Schedule'; btn.disabled = false; btn.style.color = ''; return; }
     btn.textContent = msg;
     btn.disabled = false;
     btn.style.color = isError ? 'var(--accent2)' : 'var(--accent3)';
@@ -1157,15 +1221,14 @@
   }
 
   function isInitials(token) {
-    return /^\[?[A-Z]{1,3}\]?$/.test(token) || /^\([A-Z]{1,3}\)$/.test(token) || /^<[A-Z]{1,3}>$/.test(token);
-  }
-
-  function stripBrackets(token) {
-    return token.replace(/^\[|\]$/g, '');
+    // Strip outer brackets/parens (including double) and $ suffix before checking
+    const clean = token.replace(/^\[+|\]+$|^\(+|\)+$/g, '').replace(/[\$\^\!]$/, '');
+    return /^[A-Z]{1,3}$/.test(clean) || /^<[A-Z]{1,3}>$/.test(token);
   }
 
   function isCIC(token) {
-    return /^\([A-Z]{1,3}\)$/.test(token);
+    // Single or double parens = CIC (strip $ suffix first)
+    return /^\(+[A-Z]{1,3}\)+$/.test(token.replace(/[\$\^\!]$/, ''));
   }
 
   function isDev(token) {
@@ -1173,7 +1236,7 @@
   }
 
   function cleanInitials(token) {
-    return token.replace(/^\[|\]$|^\(|\)$|^<|>$/g, '');
+    return token.replace(/^\[+|\]+$|^\(+|\)+$|^<|>$/g, '').replace(/[\$\^\!]$/, '');
   }
 
   function importFromText(raw) {
@@ -1261,7 +1324,7 @@
     renderRequests();
 
     const nightNote = prevDayShifts.length > 0 ? `, ${prevDayShifts.length} night shift${prevDayShifts.length > 1 ? 's' : ''} → ${prevDate}` : '';
-    showPasteFeedback(btn, `✓ ${parsed.length} shifts imported${nightNote}`, false);
+    showPasteFeedback(btn, '', false); // silent on success
   }
 
   // ── Leave type lookup ──
@@ -1399,6 +1462,22 @@
         ? (req.resolvedAction === 'approve' ? '✓ Approved' : '✗ Denied')
         : req.status.charAt(0).toUpperCase() + req.status.slice(1);
       const statusBadgeClass = req.resolvedAction ? '' : req.status;
+
+      // Resolved cards are collapsed by default unless _expanded is true
+      if (req.resolvedAction && !req._expanded) {
+        const color = req.resolvedAction === 'approve' ? 'var(--accent3)' : 'var(--text-muted)';
+        return `<div class="req-card ${statusClass}" id="reqcard-${req.id}"
+          style="cursor:pointer;opacity:0.6;padding:7px 12px;"
+          onclick="toggleReqExpand('${req.id}')">
+          <div style="display:flex;align-items:center;gap:8px;width:100%;">
+            <span style="font-weight:700;font-size:13px;">${req.cpc}</span>
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);flex:1;">${req.type}${fromTo ? ' · ' + fromTo : ''}</span>
+            <span style="font-family:var(--font-mono);font-size:11px;font-weight:700;color:${color};">${statusLabel}</span>
+            <span style="color:var(--text-muted);font-size:11px;">▾</span>
+          </div>
+        </div>`;
+      }
+
       const actionsHtml = req.resolvedAction
         ? `<div class="req-actions">
             <button class="btn-undo" onclick="undoRequest('${req.id}')">↩ Undo</button>
@@ -1408,9 +1487,14 @@
             <button class="btn-approve"   onclick="resolveRequest('${req.id}','approve')">✓ Approve</button>
             <button class="btn-deny"      onclick="resolveRequest('${req.id}','deny')">✗ Deny</button>
            </div>`;
+
+      const collapseBtn = req.resolvedAction
+        ? `<button onclick="toggleReqExpand('${req.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;padding:0 2px;margin-left:2px;" title="Collapse">▴</button>`
+        : '';
+
       return `<div class="req-card ${statusClass}" id="reqcard-${req.id}">
         <div class="req-info">
-          <div class="req-name">${req.cpc}</div>
+          <div class="req-name" style="display:flex;align-items:center;gap:4px;">${req.cpc}${collapseBtn}</div>
           <div class="req-detail">${typeName}${fromTo ? ' · ' + fromTo : ''}${withStr}</div>
         </div>
         <span class="req-type-badge">${req.type}</span>
@@ -1423,12 +1507,22 @@
     }).join('');
   }
 
+  function toggleReqExpand(id) {
+    const date = getActiveDate();
+    const reqs = requestsByDate[date] || [];
+    const req = reqs.find(r => String(r.id) === String(id));
+    if (!req) return;
+    req._expanded = !req._expanded;
+    renderRequests();
+  }
+
   function resolveRequest(id, action) {
     const date = getActiveDate();
     const reqs = requestsByDate[date] || [];
     const req = reqs.find(r => String(r.id) === String(id));
     if (!req) return;
     req.resolvedAction = action;
+    req._expanded = false; // always collapse on resolve
 
     // If approved partial leave: ensure lvStart/lvEnd are set for bar overlay
     if (action === 'approve' && req.isPartial) {
@@ -1475,6 +1569,7 @@
     }
 
     req.resolvedAction = null;
+    req._expanded = false;
     render();
     renderRequests();
   }
@@ -1542,7 +1637,7 @@
               ${atStart ? 'right:calc(100% + 4px);left:auto;text-align:right;' : 'left:calc(100% + 4px);right:auto;text-align:left;'}
               transform:translateY(-50%);
               white-space:nowrap;
-              font-family:var(--font-mono);font-size:9px;font-weight:700;
+              font-family:var(--font-display);font-size:10px;font-weight:700;
               color:#444;background:rgba(255,255,255,0.92);
               padding:1px 5px;border-radius:3px;
               pointer-events:none;z-index:10;
@@ -1552,9 +1647,9 @@
             preview.appendChild(labelSpan);
           } else {
             preview.style.cssText += 'display:flex;align-items:center;justify-content:center;';
-            preview.style.fontSize = '10px';
+            preview.style.fontSize = '11px';
             preview.style.fontWeight = '700';
-            preview.style.fontFamily = 'var(--font-mono)';
+            preview.style.fontFamily = 'var(--font-display)';
             preview.style.color = '#fff';
             preview.textContent = lvLabel;
           }
@@ -1572,8 +1667,8 @@
           position:absolute;left:0;right:0;top:0;bottom:0;
           background:rgba(130,130,145,0.55);
           display:flex;align-items:center;justify-content:center;
-          font-family:var(--font-mono);font-size:10px;font-weight:700;
-          color:#fff;letter-spacing:0.3px;
+          font-family:var(--font-display);font-size:11px;font-weight:700;
+          color:#fff;letter-spacing:0.1px;
           pointer-events:none;z-index:5;
           border:2px dashed rgba(255,255,255,0.6);
           border-radius:4px;
@@ -1630,6 +1725,16 @@
   function deleteShift(id) {
     const d = getActiveDate();
     if (schedulesByDate[d]) schedulesByDate[d] = schedulesByDate[d].filter(s => String(s.id) !== String(id));
+    render();
+    renderRequests();
+  }
+
+  function clearAllDays() {
+    if (!confirm('Clear all schedules and requests for every day?')) return;
+    Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
+    Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
+    Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
+    localStorage.removeItem(STORAGE_KEY);
     render();
     renderRequests();
   }
@@ -1732,11 +1837,21 @@
     const date = getActiveDate();
     const allReqs = requestsByDate[date] || [];
 
+    // Also pull in night shifts from the previous day that extend into this timeline
+    const prevDateObj2 = new Date(date + 'T12:00:00');
+    prevDateObj2.setDate(prevDateObj2.getDate() - 1);
+    const prevDateStr2 = prevDateObj2.toISOString().slice(0, 10);
+    const prevNightShifts = (schedulesByDate[prevDateStr2] || [])
+      .filter(s => s.start >= 20)                    // night shifts from prev day
+      .map(s => ({ ...s, start: s.start, end: s.end })); // times already >24 from parsing
+
+    const allShiftsForCount = [...shiftsForDate, ...prevNightShifts];
+
     // Find preview request if one is active
     const previewReq = previewReqId ? allReqs.find(r => String(r.id) === String(previewReqId)) : null;
 
     // Build effective shift list: apply approved shift changes + preview shift change
-    const effectiveShifts = shiftsForDate.map(s => {
+    const effectiveShifts = allShiftsForCount.map(s => {
       // Preview shift change takes priority
       if (previewReq && isShiftChangeType(previewReq.type) && previewReq.cpc === s.name && previewReq.to) {
         const info = parseShiftCode(previewReq.to.replace(/\s/g,''));
@@ -1762,9 +1877,12 @@
     if (previewReq && previewReq.isLeave && !previewReq.isPartial) {
       wholeShiftLeaveNames.add(previewReq.cpc);
     }
-    const filteredShifts = effectiveShifts.filter(s => !wholeShiftLeaveNames.has(s.name) && !s.cic && !s.dev);
-    // CIC employees working past 21:00 — include them from 21:00 onward
-    const cicLateShifts = effectiveShifts.filter(s => s.cic && s.end > 21 && !wholeShiftLeaveNames.has(s.name));
+    const filteredShifts = effectiveShifts.filter(s =>
+      !wholeShiftLeaveNames.has(s.name) && !s.cic && s.start < 20 &&
+      (!s.dev || s.countForStaffing)
+    );
+    // CIC employees working past 22:00 — include them in count from 22:00 onward
+    const cicLateShifts = effectiveShifts.filter(s => s.cic && s.end > 22 && !wholeShiftLeaveNames.has(s.name));
 
     // Partial leaves: approved-partial from import, manually approved partial, or preview
     const approvedPartialLeaves = allReqs.filter(r => {
@@ -1787,27 +1905,55 @@
       const slotMid = h + 0.5;
       const h24 = h % 24;
 
-      // Count employees working this slot if they cover at least 30min of the hour
-      // and are not in their last hour
-      let count = filteredShifts.filter(s => {
-        const slotStart = h;
-        const slotEnd = h + 1;
-        const overlapStart = Math.max(s.start, slotStart);
-        const overlapEnd = Math.min(s.end - 1, slotEnd); // exclude last hour
-        const overlap = overlapEnd - overlapStart;
-        return overlap >= 0.5; // at least 30 min
-      }).length;
+      // Counting rules by hour:
+      // 2100-2200: count all non-CIC, non-dev, ignore last hour rule
+      // 2200-0000: count all non-CIC, non-dev; night shifts (start>=20) ignore last hour rule;
+      //            daytime shifts still subject to last hour rule
+      // 0000+: prev-day night shifts not counted (they rolled over from yesterday)
+      // Other hours: normal rules
+      const isMidnightWindow = h24 === 22; // only 2200-2300 slot
+      const isPostMidnight   = h24 === 0 || h24 === 23 || h >= 23;
+      const is2100slot       = h24 === 21;
 
-      // Add CIC employees working past 21:00 — counted from 21:00 onward
-      if (h24 >= 21 || h >= 21) {
-        count += cicLateShifts.filter(s => {
-          const slotStart = h;
-          const slotEnd = h + 1;
-          const overlapStart = Math.max(Math.max(s.start, 21), slotStart);
-          const overlapEnd = Math.min(s.end - 1, slotEnd);
+      let count;
+      if (isPostMidnight) {
+        // 0000+: only count night shifts that actually START on this day (start < 20 not applicable)
+        // prev-day night shifts (from prevNightShifts) should not be counted here
+        count = filteredShifts.filter(s => {
+          const overlapStart = Math.max(s.start, h);
+          const overlapEnd   = Math.min(s.end - 1, h + 1);
+          return overlapEnd - overlapStart >= 0.5;
+        }).length;
+      } else if (isMidnightWindow) {
+        // 2200-2300: night shifts (start>=20) count with any overlap; daytime shifts keep last-hour rule
+        count = effectiveShifts.filter(s => {
+          if (wholeShiftLeaveNames.has(s.name)) return false;
+          if (s.cic || s.dev) return false;
+          const isNightShift = s.start >= 20;
+          if (isNightShift) {
+            return s.start < h + 1 && s.end > h; // any overlap
+          }
+          const overlapStart = Math.max(s.start, h);
+          const overlapEnd   = Math.min(s.end - 1, h + 1);
+          return overlapEnd - overlapStart >= 0.5;
+        }).length;
+      } else if (is2100slot) {
+        // 2100-2200: all except CIC and dev, ignore last hour rule
+        count = filteredShifts.filter(s => {
+          const overlapStart = Math.max(s.start, h);
+          const overlapEnd   = Math.min(s.end, h + 1);
+          return overlapEnd - overlapStart >= 0.5;
+        }).length;
+      } else {
+        // Normal hours: exclude last hour
+        count = filteredShifts.filter(s => {
+          const overlapStart = Math.max(s.start, h);
+          const overlapEnd   = Math.min(s.end - 1, h + 1);
           return overlapEnd - overlapStart >= 0.5;
         }).length;
       }
+
+      // CIC addition for 2200+ is now handled in the isMidnightWindow branch above
 
       // Subtract those on approved partial leave — but only if they were being counted
       // (i.e. the leave slot is not already their last hour, which is excluded from count)
@@ -1829,27 +1975,59 @@
       const leftPct = ((h - VIEW_START) / span) * 100;
       const widthPct = (1 / span) * 100;
 
+      // Day of week for threshold rules (0=Sun, 6=Sat)
+      const dow = new Date(getActiveDate() + 'T12:00:00').getDay();
+      const isSaturday = dow === 6;
+      const isSunday   = dow === 0;
+
+      // Helper: returns [bgColor, textColor] for a count given thresholds
+      function hourColor(cnt, redMax, yellowVal, greenMin) {
+        // yellowVal can be a number or null (no yellow zone)
+        if (cnt === 0)                          return ['transparent', 'transparent'];
+        if (greenMin !== null && cnt >= greenMin) return ['rgba(34,180,100,0.3)', '#0a5c28'];
+        if (yellowVal !== null && cnt === yellowVal) return ['rgba(253,200,60,0.4)', '#7a5500'];
+        if (cnt <= redMax)                       return ['rgba(217,79,110,0.25)', '#9b1a34'];
+        // between yellow and green (e.g. count=9 when green is 10)
+        const intensity = Math.min(0.15 + (cnt / Math.max(shiftsForDate.length, 1)) * 0.4, 0.55);
+        return [`rgba(91,155,213,${intensity})`, '#1a4a7a'];
+      }
+
       let bgColor, textColor;
       if (count === 0) {
         bgColor = 'transparent'; textColor = 'transparent';
       } else if (h24 === 6) {
-        if (count < 4) {
-          bgColor = 'rgba(217,79,110,0.25)'; textColor = '#9b1a34';
+        // 0600-0700: Sun-Fri: green>=4, red<4
+        // (Saturday not specified — use same rule)
+        [bgColor, textColor] = hourColor(count, 3, null, 4);
+      } else if (h24 === 7) {
+        // 0700-0800: Sun-Fri: green>=6, yellow=5, red<=4
+        [bgColor, textColor] = hourColor(count, 4, 5, 6);
+      } else if (h24 >= 8 && h24 < 20) {
+        // 0800-2000: existing rules (red<=5, yellow=6, blue>=7)
+        if (count <= 5)      { bgColor = 'rgba(217,79,110,0.25)'; textColor = '#9b1a34'; }
+        else if (count === 6){ bgColor = 'rgba(253,200,60,0.4)';  textColor = '#7a5500'; }
+        else { const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55); bgColor=`rgba(91,155,213,${i})`;textColor='#1a4a7a'; }
+      } else if (h24 === 20) {
+        // 2000-2100: Sun-Fri only; Saturday uses default
+        if (isSaturday) {
+          const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55);
+          bgColor = `rgba(91,155,213,${i})`; textColor = '#1a4a7a';
         } else {
-          const intensity = Math.min(0.15 + (count / shiftsForDate.length) * 0.4, 0.55);
-          bgColor = `rgba(91,155,213,${intensity})`; textColor = '#1a4a7a';
+          [bgColor, textColor] = hourColor(count, 7, null, 8);
         }
-      } else if (h24 >= 7 && h24 < 20) {
-        if (count <= 5) {
-          bgColor = 'rgba(217,79,110,0.25)'; textColor = '#9b1a34';
-        } else if (count === 6) {
-          bgColor = 'rgba(253,200,60,0.4)'; textColor = '#7a5500';
+      } else if (h24 === 21) {
+        // 2100-2200: all days green>=5, red<=4
+        [bgColor, textColor] = hourColor(count, 4, null, 5);
+      } else if (h24 === 22) {
+        // 2200-2300: Sun-Fri only; Saturday uses default
+        if (isSaturday) {
+          const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55);
+          bgColor = `rgba(91,155,213,${i})`; textColor = '#1a4a7a';
         } else {
-          const intensity = Math.min(0.15 + (count / shiftsForDate.length) * 0.4, 0.55);
-          bgColor = `rgba(91,155,213,${intensity})`; textColor = '#1a4a7a';
+          [bgColor, textColor] = hourColor(count, 2, null, 3);
         }
       } else {
-        const intensity = count === 0 ? 0 : Math.min(0.15 + (count / shiftsForDate.length) * 0.4, 0.55);
+        const intensity = count === 0 ? 0 : Math.min(0.15 + (count / Math.max(shiftsForDate.length,1)) * 0.4, 0.55);
         bgColor = count > 0 ? `rgba(91,155,213,${intensity})` : 'transparent';
         textColor = '#1a4a7a';
       }
@@ -1884,23 +2062,39 @@
       "></div>`;
     }
 
-    const sortedEmployees = Object.entries(byEmployee).sort((a, b) => {
+    const sortDate = getActiveDate();
+    const defaultOrder = Object.entries(byEmployee).sort((a, b) => {
       const aStart = Math.min(...a[1].map(s => s.start));
       const bStart = Math.min(...b[1].map(s => s.start));
       if (aStart !== bStart) return aStart - bStart;
-      // Same start: later end time goes to the bottom (higher index)
       const aEnd = Math.max(...a[1].map(s => s.end));
       const bEnd = Math.max(...b[1].map(s => s.end));
       return aEnd - bEnd;
     });
 
+    // Apply custom row order if set, preserving any new rows at the end
+    const savedOrder = rowOrderByDate[sortDate];
+    let sortedEmployees;
+    if (savedOrder && savedOrder.length) {
+      const empMap = Object.fromEntries(defaultOrder);
+      const ordered = savedOrder.filter(k => empMap[k]).map(k => [k, empMap[k]]);
+      const newRows = defaultOrder.filter(([k]) => !savedOrder.includes(k));
+      sortedEmployees = [...ordered, ...newRows];
+    } else {
+      sortedEmployees = defaultOrder;
+    }
+
     sortedEmployees.forEach(([rowKey, empShifts]) => {
-      const name = rowKey.replace(/\u200B/g, ''); // strip overnight-split suffix
-      html += `<div class="employee-row">`;
-      const totalEmpHours = empShifts.reduce((a, s) => a + (s.end - s.start), 0);
-      html += `<div class="emp-label">
+      const name = rowKey.replace(/\u200B/g, '');
+      html += `<div class="employee-row" draggable="true"
+        data-rowkey="${rowKey}"
+        ondragstart="rowDragStart(event,'${rowKey}')"
+        ondragover="rowDragOver(event)"
+        ondragleave="rowDragLeave(event)"
+        ondrop="rowDrop(event,'${rowKey}')"
+        ondragend="rowDragEnd(event)">`;
+      html += `<div class="emp-label" style="cursor:grab;">
         <span class="emp-name" title="${name}">${name}</span>
-        <span class="emp-hours">${formatDuration(totalEmpHours)}</span>
       </div><div class="bar-track">`;
 
       // Hour grid lines — rendered inside bar-track, track spans VIEW_START→VIEW_END
@@ -2013,8 +2207,7 @@
                 position:absolute;top:50%;${labelStyle}
                 transform:translateY(-50%);
                 white-space:nowrap;
-                font-family:var(--font-mono);font-size:9px;font-weight:700;
-                color:#444;background:rgba(255,255,255,0.9);
+                font-family:var(--font-display);font-size:10px;font-weight:700;
                 padding:1px 5px;border-radius:3px;
                 pointer-events:none;z-index:10;
                 box-shadow:0 1px 3px rgba(0,0,0,0.1);
@@ -2025,8 +2218,8 @@
               position:absolute;left:${lvLeft}%;width:${lvWidth}%;top:0;bottom:0;
               background:rgba(160,160,170,0.72);
               display:flex;align-items:center;justify-content:center;
-              font-family:var(--font-mono);font-size:10px;font-weight:700;
-              color:#333;letter-spacing:0.3px;
+              font-family:var(--font-display);font-size:11px;font-weight:700;
+              color:#333;letter-spacing:0.1px;
               pointer-events:none;z-index:3;
               overflow:hidden;
             ">${lvLabel}</div>`;
@@ -2159,9 +2352,6 @@
     const activeDate = getActiveDate();
     const shifts = getActiveShifts();
 
-    const uniqueNames = [...new Set(shifts.map(s => s.name))];
-    const totalHours = shifts.reduce((acc, s) => acc + (s.end - s.start), 0);
-
     if (!shifts.length) {
       container.innerHTML = '';
       container.appendChild(empty);
@@ -2169,9 +2359,44 @@
       return;
     }
 
+    // Day = ends at 18:59 or earlier; Eve = ends 19:00–00:00; exclude overnight (start >= 20)
+    const dayCount = shifts.filter(s => !s.dev && !s.cic && s.start < 20 && s.end <= 19).length;
+    const eveCount = shifts.filter(s => !s.dev && !s.cic && s.start < 20 && s.end > 19 && s.end <= 24).length;
+
+    // Determine day of week for threshold rules
+    const dow = new Date(activeDate + 'T12:00:00').getDay(); // 0=Sun, 1=Mon...6=Sat
+    const isSat = dow === 6;
+    const isSun = dow === 0;
+    const isWeekend = isSat || isSun;
+
+    // Threshold rules:
+    // Mon-Fri day & eve: green>=10, yellow=8-9, red<=7  (wait — re-read: yellow=8, green>=10, red<=7)
+    // Sat day & eve:     green>=9,  yellow=7,   red<=6
+    // Sun day:           green>=9,  yellow=7,   red<=6  (same as Sat)
+    // Sun eve:           green>=10, yellow=8,   red<=7  (same as Mon-Fri)
+
+    function staffColor(count, isWeekendRules) {
+      if (isWeekendRules) {
+        if (count >= 9)  return '#22a06b'; // green
+        if (count === 7) return '#e09000'; // yellow
+        return '#d94f6e';                  // red (6 or below)
+      } else {
+        if (count >= 10) return '#22a06b'; // green
+        if (count === 8) return '#e09000'; // yellow (8 only, 9 is also yellow? re-read: >=10 green, 8 yellow, <=7 red — 9 is neither so default text)
+        if (count === 9) return 'var(--text)'; // 9 is not explicitly colored — use default
+        return '#d94f6e';                  // red (7 or below)
+      }
+    }
+
+    const dayWeekendRules = isWeekend; // Sat and Sun day both use weekend rules
+    const eveWeekendRules = isSat;     // Sat eve uses weekend rules; Sun eve uses weekday rules
+
+    const dayColor = staffColor(dayCount, dayWeekendRules);
+    const eveColor = staffColor(eveCount, eveWeekendRules);
+
     const dateLabel = formatDateLabel(activeDate);
-    document.getElementById('chartSubtitle').textContent =
-      `${dateLabel} · ${shifts.length} shift${shifts.length>1?'s':''} · ${uniqueNames.length} employee${uniqueNames.length>1?'s':''}`;
+    document.getElementById('chartSubtitle').innerHTML =
+      `${dateLabel} &nbsp;·&nbsp; <span>Day: <strong style="color:${dayColor};">${dayCount}</strong></span> &nbsp;·&nbsp; <span>Eve: <strong style="color:${eveColor};">${eveCount}</strong></span>`;
 
     let html = `<div class="date-section">`;
     html += renderTimeline(shifts);
@@ -2230,6 +2455,16 @@
     }
   }
 
+  function toggleCountForStaffing() {
+    const cb = document.getElementById('countForStaffingCb');
+    const allShifts = getActiveShifts();
+    const shift = allShifts.find(s => String(s.id) === String(_modalShiftId));
+    if (!shift) return;
+    shift.countForStaffing = cb.checked;
+    render();
+    renderRequests();
+  }
+
   function openShiftModal(shiftId, e) {
     if (e) e.stopPropagation();
     hideTip();
@@ -2253,6 +2488,15 @@
     const durStr   = formatDuration(shift.end - shift.start);
     const typeTag  = shift.cic ? ' · CIC' : shift.dev ? ' · Trainee' : '';
     document.getElementById('modalMeta').textContent = `${startStr}–${endStr}  (${durStr})${typeTag}`;
+
+    // Trainee staffing checkbox
+    const staffingEl = document.getElementById('modalStaffingCheck');
+    if (shift.dev) {
+      staffingEl.style.display = 'flex';
+      document.getElementById('countForStaffingCb').checked = !!shift.countForStaffing;
+    } else {
+      staffingEl.style.display = 'none';
+    }
 
     // Gap info
     const activeDateObj = new Date(date + 'T12:00:00');
@@ -2470,12 +2714,52 @@
     _renderShiftModal();
   }
 
+  // ── Persistence ──
+  const STORAGE_KEY = 'shiftGraph_v1';
+
+  function saveData() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        schedulesByDate,
+        requestsByDate,
+        rowOrderByDate
+      }));
+    } catch(e) { console.warn('Save failed:', e); }
+  }
+
+  function loadData() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data.schedulesByDate) Object.assign(schedulesByDate, data.schedulesByDate);
+      if (data.requestsByDate)  Object.assign(requestsByDate,  data.requestsByDate);
+      if (data.rowOrderByDate)  Object.assign(rowOrderByDate,  data.rowOrderByDate);
+    } catch(e) { console.warn('Load failed:', e); }
+  }
+
+  // Patch render to auto-save on every call
+  const _origRender = render;
+  render = function() { _origRender(); saveData(); };
+
+  // Also save when renderRequests is called (request state changes)
+  const _origRenderRequests = renderRequests;
+  renderRequests = function() { _origRenderRequests(); saveData(); };
+
+  // Safety net: save on page close/refresh
+  window.addEventListener('beforeunload', saveData);
+
   // ── Init ──
   (function init() {
+    loadData();
+
     const today = new Date().toISOString().slice(0, 10);
     const dateFilter = document.getElementById('dateFilter');
     if (dateFilter) {
-      dateFilter.value = today;
+      // If we have saved data, open to the most recent date; otherwise today
+      const savedDates = Object.keys(schedulesByDate).sort();
+      const startDate = savedDates.length ? savedDates[savedDates.length - 1] : today;
+      dateFilter.value = startDate;
       dateFilter.addEventListener('change', () => { render(); renderRequests(); });
     }
     render();
