@@ -731,6 +731,21 @@
     <div id="modalName" style="font-size:18px;font-weight:700;margin-bottom:4px;"></div>
     <div id="modalMeta" style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted);margin-bottom:10px;"></div>
 
+    <!-- Shift time edit -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;align-items:flex-end;">
+      <div style="flex:1;">
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:1px;">Start Time</div>
+        <input type="text" id="modalStartTime" placeholder="0700" maxlength="4"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:14px;padding:7px 10px;border-radius:8px;outline:none;text-align:center;"/>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:1px;">Duration (hrs)</div>
+        <input type="number" id="modalDuration" value="8" min="1" max="14" step="0.5"
+          style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:14px;padding:7px 10px;border-radius:8px;outline:none;text-align:center;"/>
+      </div>
+      <button class="btn btn-primary" style="padding:7px 14px;font-size:13px;white-space:nowrap;" onclick="applyModalShiftTime()">Apply</button>
+    </div>
+
     <!-- Trainee staffing toggle -->
     <div id="modalStaffingCheck" style="display:none;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
       <input type="checkbox" id="countForStaffingCb" onchange="toggleCountForStaffing()" style="width:16px;height:16px;cursor:pointer;accent-color:#5b9bd5;"/>
@@ -843,7 +858,9 @@
       </div>
     </div>
     <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
-    <button class="btn btn-ghost" onclick="copyBookmarklet()" id="bmBtn" title="Copy bookmarklet to clipboard so you can drag it to your bookmarks bar">🔖 Copy Bookmarklet</button>
+    <button class="btn btn-ghost" onclick="pastePayPeriod()" id="ppBtn">📅 Paste Pay Period</button>
+    <button class="btn btn-ghost" onclick="pastePendingRequests()" id="prBtn">📝 Paste Requests</button>
+    <button class="btn btn-ghost" onclick="copyBookmarklet()" id="bmBtn" title="Copy bookmarklet to clipboard">🔖 Copy Bookmarklet</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
   </div>
 </header>
@@ -894,6 +911,10 @@
 </main>
 
 <script>
+  // ── Timeline constants ──
+  let VIEW_START = 4;
+  let VIEW_END = 26;
+
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
   const schedulesByDate = {};
@@ -901,7 +922,7 @@
   const requestsByDate = {};
   // rowOrderByDate: { 'YYYY-MM-DD': ['rowKey1','rowKey2',...] } — manual drag order
   const rowOrderByDate = {};
-  let previewReqId = null; // request currently being visualized
+  const previewReqIds = new Set(); // requests currently being previewed
   let colorMap = {};
   const BAR_COLOR = { bg: '#5b9bd5', text: '#fff' };
   const DEV_COLOR = { bg: '#7c5cbf', text: '#fff' };
@@ -912,7 +933,7 @@
 
   function changeDate(offset) {
     const picker = document.getElementById('dateFilter');
-    const current = picker.value || new Date().toISOString().slice(0, 10);
+    const current = picker.value || localDateStr();
     const d = new Date(current + 'T12:00:00');
     d.setDate(d.getDate() + offset);
     picker.value = d.toISOString().slice(0, 10);
@@ -920,8 +941,16 @@
     renderRequests();
   }
 
+  function localDateStr(d) {
+    d = d || new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   function getActiveDate() {
-    return document.getElementById('dateFilter').value || new Date().toISOString().slice(0, 10);
+    return document.getElementById('dateFilter').value || localDateStr();
   }
 
   function getActiveShifts() {
@@ -984,7 +1013,239 @@
     _dragRowKey = null;
   }
 
-  // ── Copy Bookmarklet ──
+  // ── Paste Pending Requests ──
+  function pastePendingRequests() {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:90%;max-width:460px;box-shadow:0 12px 40px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
+        <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Paste Pending Requests</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+          Click the <strong>📝 Copy Requests</strong> bookmarklet on the All Pending Requests page, then press <strong>Ctrl+V</strong>.
+        </div>
+        <textarea id="prDialogTA" style="width:100%;height:60px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-mono);font-size:12px;padding:10px;resize:none;outline:none;opacity:0.5;" placeholder="Waiting for paste (Ctrl+V)..."></textarea>
+        <div style="margin-top:12px;"><button class="btn btn-ghost" onclick="this.closest('div[style*=fixed]').remove()">Cancel</button></div>
+      </div>`;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    const ta = document.getElementById('prDialogTA');
+    if (ta) {
+      ta.focus();
+      ta.addEventListener('paste', () => {
+        setTimeout(() => {
+          const text = ta.value.trim();
+          overlay.remove();
+          if (text) importPendingRequests(text);
+        }, 50);
+      });
+    }
+  }
+
+  function importPendingRequests(text) {
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!normalized.includes('===PENDING_REQUESTS===')) {
+      alert('Invalid format. Use the 📝 Copy Requests bookmarklet on the All Pending Requests page.');
+      return;
+    }
+    const lines = normalized.split('\n').map(l => l.trim()).filter(Boolean);
+    const startIdx = lines.indexOf('===PENDING_REQUESTS===');
+    let imported = 0;
+
+    for (let i = startIdx + 1; i < lines.length; i++) {
+      const parts = lines[i].split('|');
+      if (parts.length < 4) continue;
+      const [initials, type, requestDateRaw, remark, status] = parts;
+
+      // Parse MM/DD/YYYY request date
+      const dm = requestDateRaw.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (!dm) continue;
+      const dateStr = `${dm[3]}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`;
+
+      // Only add to dates that have schedule data
+      if (!schedulesByDate[dateStr] || !schedulesByDate[dateStr].length) continue;
+
+      if (!requestsByDate[dateStr]) requestsByDate[dateStr] = [];
+
+      // Avoid duplicates
+      const exists = requestsByDate[dateStr].some(r =>
+        r.cpc === initials && r.type === type && r.status === 'pending'
+      );
+      if (exists) continue;
+
+      requestsByDate[dateStr].push({
+        id: Date.now() + Math.random(),
+        cpc: initials,
+        type: type.trim(),
+        from: 'Shift',
+        to: '',
+        withCol: '',
+        status: 'pending',
+        remarks: remark ? remark.trim() : '',
+        isLeave: true,
+        isPartial: false,
+        resolvedAction: null,
+        _expanded: false
+      });
+      imported++;
+    }
+
+    render();
+    renderRequests();
+
+    const btn = document.getElementById('prBtn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = `✓ ${imported} requests added`;
+      btn.style.color = 'var(--accent3)';
+      setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 3000);
+    }
+  }
+
+  // ── Paste Pay Period ──
+  async function pastePayPeriod() {
+    // Always show dialog — clipboard readText is blocked on file:// pages
+    // and the bookmarklet data needs to be pasted manually anyway
+    showPayPeriodDialog();
+  }
+
+  function showPayPeriodDialog() {
+    const overlay = document.createElement('div');
+    overlay.id = 'ppDialogOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:90%;max-width:460px;box-shadow:0 12px 40px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
+        <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Paste Pay Period</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+          Click the <strong>📅 Copy Pay Period</strong> bookmarklet, then press <strong>Ctrl+V</strong> — it will import automatically.
+        </div>
+        <textarea id="ppDialogTA" style="width:100%;height:60px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-mono);font-size:12px;padding:10px;resize:none;outline:none;opacity:0.5;" placeholder="Waiting for paste (Ctrl+V)..."></textarea>
+        <div style="display:flex;gap:10px;margin-top:14px;">
+          <button class="btn btn-ghost" onclick="document.getElementById('ppDialogOverlay').remove()">Cancel</button>
+        </div>
+      </div>`;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    const ta = document.getElementById('ppDialogTA');
+    if (ta) {
+      ta.focus();
+      ta.addEventListener('paste', (e) => {
+        // Let the paste populate the textarea, then immediately submit
+        setTimeout(() => {
+          const text = ta.value.trim();
+          overlay.remove();
+          if (text) importPayPeriodHTML(text);
+        }, 50);
+      });
+    }
+  }
+
+  function submitPayPeriodDialog() {
+    const ta = document.getElementById('ppDialogTA');
+    const text = ta ? ta.value.trim() : '';
+    document.getElementById('ppDialogOverlay')?.remove();
+    if (!text) return;
+    importPayPeriodHTML(text);
+  }
+
+  function importPayPeriodHTML(text) {
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (normalized.includes('===PAY_PERIOD===')) {
+      importPayPeriodCompact(normalized);
+      return;
+    }
+    try { importPayPeriodDOM(normalized); } catch(e) { alert('Error importing: ' + e.message); }
+  }
+
+  function importPayPeriodCompact(text) {
+    const lines = text.split('\n').map(l => l.trim().replace(/\r/g, '')).filter(Boolean);
+    const ppIdx = lines.indexOf('===PAY_PERIOD===');
+    const schIdx = lines.indexOf('===PP_SCHEDULE===');
+    if (ppIdx === -1 || schIdx === -1) { alert('Invalid pay period format.'); return; }
+
+    const dateStrs = lines[ppIdx + 1].split(',');
+    // Convert MM/DD/YYYY to YYYY-MM-DD
+    const dates = dateStrs.map(d => {
+      const [m, day, y] = d.trim().split('/');
+      return `${y}-${m.padStart(2,'0')}-${day.padStart(2,'0')}`;
+    });
+
+    let totalImported = 0;
+
+    const employeeLines = lines.slice(schIdx + 1);
+
+    for (const line of employeeLines) {
+      const pipeIdx = line.indexOf('|');
+      if (pipeIdx === -1) continue;
+      const initials = line.slice(0, pipeIdx).trim();
+      const shifts = line.slice(pipeIdx + 1).split(',');
+
+      for (let d = 0; d < shifts.length && d < dates.length; d++) {
+        let rawCode = shifts[d].trim();
+        if (!rawCode) continue;
+
+        let isCICShift = false;
+        let isDevShift = false;
+
+        if (/^A<.+>$/.test(rawCode)) continue;
+
+        const prefixMatch = rawCode.match(/^(@D|@T|@|C|T|D)(.+)$/i);
+        if (prefixMatch) {
+          const prefix = prefixMatch[1].toUpperCase();
+          rawCode = prefixMatch[2];
+          if (prefix === 'C') isCICShift = true;
+          if (prefix === 'T') isDevShift = true;
+          if (prefix === 'D' || prefix === '@D') continue;
+        }
+
+        rawCode = rawCode.replace(/[\$\^\!]$/, '');
+        const info = parseShiftCode(rawCode);
+        if (!info) continue;
+
+        let targetDate = dates[d];
+        if (info.start >= 20) {
+          const prev = new Date(dates[d] + 'T12:00:00');
+          prev.setDate(prev.getDate() - 1);
+          targetDate = prev.toISOString().slice(0, 10);
+        }
+
+        if (!schedulesByDate[targetDate]) schedulesByDate[targetDate] = [];
+
+        const exists = schedulesByDate[targetDate].some(s =>
+          s.name === initials && Math.abs(s.start - info.start) < 0.01 && Math.abs(s.end - info.end) < 0.01
+        );
+        if (!exists) {
+          schedulesByDate[targetDate].push({
+            id: Date.now() + Math.random(),
+            name: initials,
+            start: info.start,
+            end: info.end,
+            cic: isCICShift,
+            dev: isDevShift,
+            role: 'Pay Period Import'
+          });
+          totalImported++;
+        }
+      }
+    }
+
+    if (!totalImported) { alert('No shifts found in pay period data.'); return; }
+
+    const today = localDateStr();
+    const dateFilter = document.getElementById('dateFilter');
+    if (dateFilter) dateFilter.value = today;
+
+    render();
+    renderRequests();
+
+    const btn = document.getElementById('ppBtn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = `✓ ${totalImported} shifts loaded`;
+      btn.style.color = 'var(--accent3)';
+      setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 3000);
+    }
+  }
+
   function copyBookmarklet() {
     const code = `(function(){try{var L={'2030-10':[20,30,30,30],'0500-9':[5,0,14,0],'1200-9':[12,0,21,0],'1400-9':[14,0,23,0],'1600':[16,0,24,0],'0000':[0,0,32,0],'2230':[22,30,30,30],'0600':[6,0,14,0],'0600-10':[6,0,16,0],'0600-9':[6,0,15,0],'0700':[7,0,15,0],'0700-10':[7,0,17,0],'0700-9':[7,0,16,0],'0800':[8,0,16,0],'1100-10':[11,0,21,0],'1200-10':[12,0,22,0],'1300':[13,0,21,0],'1300-10':[13,0,23,0],'1400':[14,0,22,0],'1500':[15,0,23,0],'0900':[9,0,17,0],'0700F':[7,0,15,0],'0800-10':[8,0,18,0],'0800-9':[8,0,17,0],'0000F':[0,0,32,0],'2230F':[22,30,30,30],'0530-7':[5,30,12,30],'0600F':[6,0,14,0],'0800F':[8,0,16,0],'1000-7':[10,0,17,0],'1200':[12,0,20,0],'1300-7':[13,0,20,0],'1300-9':[13,0,22,0],'1300F':[13,0,21,0],'1400F':[14,0,22,0],'1500F':[15,0,23,0],'1600F':[16,0,24,0],'1430':[14,30,22,30],'0730':[7,30,15,30],'0830':[8,30,16,30],'0900-10':[9,0,19,0],'1000':[10,0,18,0],'1100-9':[11,0,20,0],'1400-7':[14,0,21,0],'0600-7':[6,0,13,0],'0700-7':[7,0,14,0],'1400-10':[14,0,24,0],'0800-7':[8,0,15,0],'1500-9':[15,0,24,0],'2300F':[23,0,31,0],'2300':[23,0,31,0],'0630':[6,30,14,30],'2200-9':[22,0,31,0],'2300-9':[23,0,32,0],'0900-7':[9,0,16,0],'1600-7':[16,0,23,0],'1700-9':[17,0,26,0],'2200-10':[22,0,32,0],'0900-9':[9,0,17,0],'1200-7':[12,0,19,0],'2230-9':[22,30,31,30],'0730-7':[7,30,14,30],'1500-7':[15,0,22,0],'1000-10':[10,0,20,0],'1000-9':[10,0,19,0],'1100':[11,0,19,0],'1330':[13,30,21,30],'0630-7':[6,30,13,30],'2230-7':[22,30,29,30],'1100-7':[11,0,18,0],'1700-7':[17,0,24,0],'1615':[16,15,24,15],'1615-7':[16,15,23,15],'1700':[17,0,25,0],'2130':[21,30,29,30],'0530':[5,30,13,30],'1100F':[11,0,19,0],'2200':[22,0,30,0],'2100-10':[21,0,31,0],'0630-9':[6,30,15,30],'1200F':[12,0,20,0],'0500-10':[5,0,15,0],'0530-9':[5,30,14,30],'0530-10':[5,30,15,30],'1130':[11,30,19,30],'1530':[15,30,23,30],'2330-7':[23,30,30,30],'2130-9':[21,30,30,30],'1600-9':[16,0,25,0],'2300-7':[23,0,30,0],'1215-10':[12,15,22,15],'0000-7':[0,0,31,0],'1430-7':[14,30,21,30],'0600-10F':[6,0,16,0],'0900-10F':[9,0,19,0],'0400':[4,0,12,0],'1200-10F':[12,0,22,0],'0900F':[9,0,17,0],'2230-10':[22,30,32,30],'0930-7':[9,30,16,30],'0930':[9,30,17,30],'0630-10':[6,30,16,30],'1330-10':[13,30,23,30],'1300-10F':[13,0,23,0],'0000-9':[0,0,33,0],'0800-10F':[8,0,18,0],'1100-10F':[11,0,21,0],'0430-10':[4,30,14,30],'1330-9':[13,30,22,30],'0700-10F':[7,0,17,0],'1130-10':[11,30,21,30],'1430-9':[14,30,23,30],'0600-7F':[6,0,13,0],'1630':[16,30,24,30],'2345':[23,45,31,45],'0930-10':[9,30,19,30],'2100-10F':[21,0,31,0],'0545-6':[5,45,11,45],'0830-10':[8,30,18,30],'2345F':[23,45,31,45],'1400-10F':[14,0,24,0],'0500-6':[5,0,11,0],'2245':[22,45,30,45],'2245-9':[22,45,31,45],'2245F':[22,45,30,45],'0545-7':[5,45,12,45],'0700ADMIN':[7,0,15,30],'0500':[5,0,13,0],'0545':[5,45,13,45],'2100':[21,0,29,0]};function shiftEndTime(code){var c=code.toUpperCase().replace(/^(@D|@T|@|C|T|D)/,'').replace(/(TMC|OM)[\$\^!]?$/,'').replace(/[\$\^!]$/,'').replace(/^AREA/,'').trim();if(L[c]){return L[c];}var nf=c.replace(/F$/,'');if(L[nf]){return L[nf];}return null;}var dateEl=document.getElementById('lblSelectedDate');if(!dateEl){alert('Not on WMT Worksheet View page.');return;}var dateText=dateEl.textContent.trim();var out='===DATE===\\n'+dateText+'\\n===SCHEDULE_START===\\n';var shiftTable=document.getElementById('ScheduledShifts');if(!shiftTable){alert('Could not find ScheduledShifts table.');return;}var rows=shiftTable.querySelectorAll('tr');for(var i=1;i<rows.length;i++){var tds=rows[i].querySelectorAll('td');if(tds.length<3)continue;var rawCode=tds[0].textContent.trim();if(!rawCode)continue;var names=[];var supLinks=tds[1].querySelectorAll('a');for(var s=0;s<supLinks.length;s++){var st=supLinks[s].textContent.trim().replace(/\\s+/g,'');if(st)names.push('('+st+')');}var cpcLinks=tds[2].querySelectorAll('a');for(var c=0;c<cpcLinks.length;c++){var ct=cpcLinks[c].textContent.trim().replace(/\\s+/g,'');if(ct)names.push(ct);}if(tds.length>3){var devLinks=tds[3].querySelectorAll('a');for(var d=0;d<devLinks.length;d++){var dt=devLinks[d].textContent.trim().replace(/\\s+/g,'');if(dt)names.push('<'+dt+'>');}}if(names.length>0)out+=rawCode+'\\n'+names.join(' ')+'\\n';}out+='===REQUESTS_START===\\n';out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';function parseReqTable(tblId){var tbl=document.getElementById(tblId);if(!tbl)return;var rs=tbl.querySelectorAll('tr');for(var i=1;i<rs.length;i++){var tds=rs[i].querySelectorAll('td');if(tds.length<6)continue;out+=tds[0].textContent.trim()+'\\t'+tds[1].textContent.trim()+'\\t'+tds[2].textContent.trim()+'\\t'+tds[3].textContent.trim()+'\\t'+tds[4].textContent.trim()+'\\t'+tds[5].textContent.trim()+'\\t'+(tds.length>6?tds[6].textContent.trim():'')+'\\t'+(tds.length>7?tds[7].textContent.trim():'')+'\\n';}}parseReqTable('tblShiftChange');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblXTECTE');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblSupRequests');navigator.clipboard.writeText(out).then(function(){},function(){alert('Clipboard access denied.');});}catch(e){alert('Bookmarklet error: '+e.message);}})();`;
 
@@ -1095,25 +1356,32 @@
       " onclick="event.stopPropagation()">
         <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Paste Schedule Data</div>
         <div style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono);margin-bottom:14px;">
-          Press Ctrl+V (or Cmd+V) to paste your bookmarklet data below, then click Import.
+          Press Ctrl+V to paste your bookmarklet data — it will import automatically.
         </div>
         <textarea id="pasteDialogTA" style="
-          width:100%;min-height:180px;
+          width:100%;height:60px;
           background:var(--surface2);border:1px solid var(--border);border-radius:8px;
           color:var(--text);font-family:var(--font-mono);font-size:12px;
-          padding:10px;resize:vertical;outline:none;line-height:1.5;
-        " placeholder="Paste here..."></textarea>
+          padding:10px;resize:none;outline:none;opacity:0.5;
+        " placeholder="Waiting for paste (Ctrl+V)..."></textarea>
         <div style="display:flex;gap:10px;margin-top:14px;">
-          <button class="btn btn-primary" style="flex:1;" onclick="submitPasteDialog()">⬆ Import</button>
           <button class="btn btn-ghost" onclick="closePasteDialog()">Cancel</button>
         </div>
       </div>`;
     overlay.addEventListener('click', closePasteDialog);
     document.body.appendChild(overlay);
-    // Auto-focus the textarea so Ctrl+V works immediately
     setTimeout(() => {
       const ta = document.getElementById('pasteDialogTA');
-      if (ta) ta.focus();
+      if (ta) {
+        ta.focus();
+        ta.addEventListener('paste', () => {
+          setTimeout(() => {
+            const text = ta.value.trim();
+            closePasteDialog();
+            if (text) importFromText(text);
+          }, 50);
+        });
+      }
     }, 50);
   }
 
@@ -1199,10 +1467,10 @@
   };
 
   function parseShiftCode(token) {
-    // Strip special purpose prefixes: C, @, D, T, @D, @T
-    let t = token.replace(/^(@D|@T|@|C|T|D)/i, '');
-    // Strip suffixes like TMC, OM, $, ^, ! and trailing modifiers
-    t = t.replace(/(TMC|OM)[\$\^\!]?$/i, '').replace(/[\$\^\!]$/, '');
+    // Detail shifts (D/D0700) — not in operation, skip
+    if (/^(@D|D)\d/i.test(token)) return null;
+    // Strip special purpose prefixes: C, @, T, @T
+    let t = token.replace(/^(@T|@|C|T)/i, '');
     // Strip AREA prefix (TMU shifts)
     t = t.replace(/^AREA/i, '');
     // Normalize F suffix position (e.g. 0600-10F → keep, 0600F → keep)
@@ -1281,7 +1549,7 @@
     const dateMatch = raw.match(/===DATE===\s*\n([^\n]+)/);
     if (dateMatch) {
       const d = new Date(dateMatch[1].trim());
-      if (!isNaN(d)) importedDate = d.toISOString().slice(0, 10);
+      if (!isNaN(d)) importedDate = localDateStr(d);
     }
 
     // Extract schedule section
@@ -1322,7 +1590,7 @@
       return;
     }
 
-    const targetDate = importedDate || new Date().toISOString().slice(0, 10);
+    const targetDate = importedDate || localDateStr();
     const targetDateObj = new Date(targetDate + 'T12:00:00');
     const prevDateObj = new Date(targetDateObj);
     prevDateObj.setDate(prevDateObj.getDate() - 1);
@@ -1434,6 +1702,7 @@
             lvStart, lvEnd,
             isLeave: true, isPartial: true,
             resolvedAction: 'approve',
+            _expanded: false,
             date: targetDate
           });
         }
@@ -1455,6 +1724,7 @@
           isLeave: leaveType,
           isPartial: leaveType && !wholeShift,
           resolvedAction: null,
+          _expanded: false,
           date: targetDate
         });
       }
@@ -1497,6 +1767,20 @@
         : req.status.charAt(0).toUpperCase() + req.status.slice(1);
       const statusBadgeClass = req.resolvedAction ? '' : req.status;
 
+      // Unresolved pending cards — collapsed by default unless _expanded
+      if (!req.resolvedAction && !req._expanded) {
+        return `<div class="req-card ${statusClass}" id="reqcard-${req.id}"
+          style="cursor:pointer;padding:7px 12px;"
+          onclick="toggleReqExpand('${req.id}')">
+          <div style="display:flex;align-items:center;gap:8px;width:100%;">
+            <span style="font-weight:700;font-size:13px;">${req.cpc}</span>
+            <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);flex:1;">${req.type}${fromTo ? ' · ' + fromTo : ''}</span>
+            <span class="req-status ${statusBadgeClass}" style="font-size:10px;">${statusLabel}</span>
+            <span style="color:var(--text-muted);font-size:11px;">▾</span>
+          </div>
+        </div>`;
+      }
+
       // Resolved cards are collapsed by default unless _expanded is true
       if (req.resolvedAction && !req._expanded) {
         const color = req.resolvedAction === 'approve' ? 'var(--accent3)' : 'var(--text-muted)';
@@ -1513,20 +1797,20 @@
       }
 
       const actionsHtml = req.resolvedAction
-        ? `<div class="req-actions">
+        ? `<div class="req-actions" onclick="event.stopPropagation()">
             <button class="btn-undo" onclick="undoRequest('${req.id}')">↩ Undo</button>
            </div>`
-        : `<div class="req-actions">
+        : `<div class="req-actions" onclick="event.stopPropagation()">
             <button class="btn-visualize" onclick="visualizeRequest('${req.id}')">👁 View</button>
             <button class="btn-approve"   onclick="resolveRequest('${req.id}','approve')">✓ Approve</button>
             <button class="btn-deny"      onclick="resolveRequest('${req.id}','deny')">✗ Deny</button>
            </div>`;
 
       const collapseBtn = req.resolvedAction
-        ? `<button onclick="toggleReqExpand('${req.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;padding:0 2px;margin-left:2px;" title="Collapse">▴</button>`
+        ? `<button onclick="event.stopPropagation();toggleReqExpand('${req.id}')" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;padding:0 2px;margin-left:2px;" title="Collapse">▴</button>`
         : '';
 
-      return `<div class="req-card ${statusClass}" id="reqcard-${req.id}">
+      return `<div class="req-card ${statusClass}" id="reqcard-${req.id}" style="cursor:pointer;" onclick="toggleReqExpand('${req.id}')">
         <div class="req-info">
           <div class="req-name" style="display:flex;align-items:center;gap:4px;">${req.cpc}${collapseBtn}</div>
           <div class="req-detail">${typeName}${fromTo ? ' · ' + fromTo : ''}${withStr}</div>
@@ -1609,113 +1893,34 @@
   }
 
   function visualizeRequest(id) {
+    const sid = String(id);
     const date = getActiveDate();
     const reqs = requestsByDate[date] || [];
-    const req = reqs.find(r => String(r.id) === String(id));
+    const req = reqs.find(r => String(r.id) === sid);
     if (!req) return;
 
-    // Check if already glowing
-    const existing = document.querySelector(`.shift-bar[data-name="${req.cpc}"].visualize-glow`);
-    const isGlowing = !!existing;
-
-    if (isGlowing) {
-      // Toggle off — clear preview and restore counts
-      previewReqId = null;
-      render();
-      return;
+    if (previewReqIds.has(sid)) {
+      previewReqIds.delete(sid);
+    } else {
+      previewReqIds.add(sid);
     }
 
-    // Set preview and re-render counts first
-    previewReqId = id;
     render();
+    renderRequests();
 
-    // Now find the freshly rendered bars and apply glow + overlays
-    const bars = document.querySelectorAll(`.shift-bar[data-name="${req.cpc}"]`);
-    if (!bars.length) { previewReqId = null; render(); return; }
-
-    bars.forEach(bar => {
-      bar.classList.add('visualize-glow');
-
-      // Partial leave preview overlay
-      if (req.isLeave && req.isPartial && req.from && req.to) {
-        const lvStart = parseTimeStr(req.from);
-        const lvEnd   = parseTimeStr(req.to);
-        const shiftStart = parseFloat(bar.dataset.start);
-        const shiftEnd   = parseFloat(bar.dataset.end);
-
-        if (lvStart !== null && lvEnd !== null && !isNaN(shiftStart)) {
-          const barDur = shiftEnd - shiftStart;
-          const lvLeft  = ((lvStart - shiftStart) / barDur) * 100;
-          const lvWidth = ((lvEnd - lvStart) / barDur) * 100;
-          const lvLabel = `LV ${formatTime(lvStart)}–${formatTime(lvEnd)}`;
-          const tooNarrow = lvWidth < 10;
-
-          const preview = document.createElement('div');
-          preview.className = 'lv-preview';
-          preview.style.cssText = `
-            position:absolute;left:${lvLeft}%;width:${lvWidth}%;top:0;bottom:0;
-            background:rgba(130,130,145,0.65);
-            pointer-events:none;z-index:5;
-            border:2px dashed rgba(255,255,255,0.6);
-            border-radius:4px;
-            overflow:visible;
-          `;
-
-          if (tooNarrow) {
-            const lvMid = (lvStart + lvEnd) / 2;
-            const shiftMid = (shiftStart + shiftEnd) / 2;
-            const atStart = lvMid <= shiftMid;
-            const labelSpan = document.createElement('span');
-            labelSpan.style.cssText = `
-              position:absolute;top:50%;
-              ${atStart ? 'right:calc(100% + 4px);left:auto;text-align:right;' : 'left:calc(100% + 4px);right:auto;text-align:left;'}
-              transform:translateY(-50%);
-              white-space:nowrap;
-              font-family:var(--font-display);font-size:10px;font-weight:700;
-              color:#444;background:rgba(255,255,255,0.92);
-              padding:1px 5px;border-radius:3px;
-              pointer-events:none;z-index:10;
-              box-shadow:0 1px 3px rgba(0,0,0,0.12);
-            `;
-            labelSpan.textContent = lvLabel;
-            preview.appendChild(labelSpan);
-          } else {
-            preview.style.cssText += 'display:flex;align-items:center;justify-content:center;';
-            preview.style.fontSize = '11px';
-            preview.style.fontWeight = '700';
-            preview.style.fontFamily = 'var(--font-display)';
-            preview.style.color = '#fff';
-            preview.textContent = lvLabel;
-          }
-
-          bar.style.overflow = 'visible';
-          bar.appendChild(preview);
-        }
-      }
-
-      // Whole-shift leave preview
-      if (req.isLeave && !req.isPartial) {
-        const preview = document.createElement('div');
-        preview.className = 'lv-preview';
-        preview.style.cssText = `
-          position:absolute;left:0;right:0;top:0;bottom:0;
-          background:rgba(130,130,145,0.55);
-          display:flex;align-items:center;justify-content:center;
-          font-family:var(--font-display);font-size:11px;font-weight:700;
-          color:#fff;letter-spacing:0.1px;
-          pointer-events:none;z-index:5;
-          border:2px dashed rgba(255,255,255,0.6);
-          border-radius:4px;
-        `;
-        preview.textContent = `LV – ${LEAVE_TYPES[req.type] || req.type}`;
-        bar.appendChild(preview);
-      }
+    // Apply glow to all currently previewed bars
+    const date2 = getActiveDate();
+    previewReqIds.forEach(pid => {
+      const r = (requestsByDate[date2] || []).find(x => String(x.id) === pid);
+      if (!r) return;
+      document.querySelectorAll(`.shift-bar[data-name="${r.cpc}"]`)
+        .forEach(bar => bar.classList.add('visualize-glow'));
     });
-
-    bars[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (previewReqIds.has(sid)) {
+      const bars = document.querySelectorAll(`.shift-bar[data-name="${req.cpc}"]`);
+      if (bars[0]) bars[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   }
-
-
 
   // Date picker switches the active date — handled in DOMContentLoaded
 
@@ -1808,7 +2013,7 @@
 
     // Current time position — only show if viewing today's date
     const activeDate = getActiveDate();
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = localDateStr();
     let nowPct = -1;
     if (activeDate === todayStr) {
       const now = new Date();
@@ -1819,17 +2024,27 @@
       if (nowPct < 0 || nowPct > 100) nowPct = -1;
     }
 
-    // Group shifts by row key.
-    // If an employee has both an overnight shift (start >= 20 or end > 24+) AND a day shift,
-    // give the overnight shift its own row key so it sorts with the other overnight bars.
+    // Apply all previewed shift changes to bar display (keeps row position)
+    const displayPreviewReqs = Array.from(previewReqIds)
+      .map(pid => (requestsByDate[getActiveDate()] || []).find(r => String(r.id) === pid))
+      .filter(Boolean);
+
+    const displayShifts = shiftsForDate.map(s => {
+      const pr = displayPreviewReqs.find(r => isShiftChangeType(r.type) && r.cpc === s.name && r.to);
+      if (pr) {
+        const info = parseShiftCode(pr.to.replace(/\s/g,''));
+        if (info) return { ...s, start: info.start, end: info.end, _origStart: s.start };
+      }
+      return s;
+    });
+
     const byEmployee = {};
-    shiftsForDate.forEach(s => {
-      const isNight = s.start >= 20;
-      // Check if this employee also has a non-night shift
-      const hasDay = shiftsForDate.some(o => o.name === s.name && o.start < 20);
-      const hasNight = shiftsForDate.some(o => o.name === s.name && o.start >= 20);
-      // If employee has BOTH, give overnight shift a separate row key (name + zero-width space)
-      const rowKey = (isNight && hasDay && hasNight) ? s.name + '\u200B' : s.name;
+    displayShifts.forEach(s => {
+      const rowStart = s._origStart !== undefined ? s._origStart : s.start;
+      const isNight  = rowStart >= 20;
+      const hasDay   = displayShifts.some(o => o.name === s.name && (o._origStart ?? o.start) < 20);
+      const hasNight = displayShifts.some(o => o.name === s.name && (o._origStart ?? o.start) >= 20);
+      const rowKey   = (isNight && hasDay && hasNight) ? s.name + '\u200B' : s.name;
       if (!byEmployee[rowKey]) byEmployee[rowKey] = [];
       byEmployee[rowKey].push(s);
     });
@@ -1881,17 +2096,20 @@
 
     const allShiftsForCount = [...shiftsForDate, ...prevNightShifts];
 
-    // Find preview request if one is active
-    const previewReq = previewReqId ? allReqs.find(r => String(r.id) === String(previewReqId)) : null;
+    // Find all active preview requests
+    const previewReqs = Array.from(previewReqIds)
+      .map(pid => allReqs.find(r => String(r.id) === pid))
+      .filter(Boolean);
 
-    // Build effective shift list: apply approved shift changes + preview shift change
+    // Build effective shift list: apply approved shift changes + all previewed shift changes
     const effectiveShifts = allShiftsForCount.map(s => {
-      // Preview shift change takes priority
-      if (previewReq && isShiftChangeType(previewReq.type) && previewReq.cpc === s.name && previewReq.to) {
-        const info = parseShiftCode(previewReq.to.replace(/\s/g,''));
+      // Preview shift changes take priority
+      const pr = previewReqs.find(r => isShiftChangeType(r.type) && r.cpc === s.name && r.to);
+      if (pr) {
+        const info = parseShiftCode(pr.to.replace(/\s/g,''));
         if (info) return { ...s, start: info.start, end: info.end };
       }
-      // Approved shift change (from button or already in data)
+      // Approved shift change
       const shiftChg = allReqs.find(r =>
         r.cpc === s.name && isShiftChangeType(r.type) && r.resolvedAction === 'approve'
       );
@@ -1902,30 +2120,27 @@
       return s;
     });
 
-    // For whole-shift leave that's approved (button): remove from effective shifts
-    // For preview whole-shift leave: also remove
+    // For whole-shift leave that's approved or previewed: remove from effective shifts
     const wholeShiftLeaveNames = new Set(allReqs
       .filter(r => r.isLeave && !r.isPartial && r.resolvedAction === 'approve')
       .map(r => r.cpc)
     );
-    if (previewReq && previewReq.isLeave && !previewReq.isPartial) {
-      wholeShiftLeaveNames.add(previewReq.cpc);
-    }
+    previewReqs.filter(r => r.isLeave && !r.isPartial).forEach(r => wholeShiftLeaveNames.add(r.cpc));
+
     const filteredShifts = effectiveShifts.filter(s =>
       !wholeShiftLeaveNames.has(s.name) && !s.cic && s.start < 20 &&
       (!s.dev || s.countForStaffing)
     );
-    // CIC employees working past 22:00 — include them in count from 22:00 onward
     const cicLateShifts = effectiveShifts.filter(s => s.cic && s.end > 22 && !wholeShiftLeaveNames.has(s.name));
 
-    // Partial leaves: approved-partial from import, manually approved partial, or preview
+    // Partial leaves: approved-partial from import, manually approved, or previewed
     const approvedPartialLeaves = allReqs.filter(r => {
       const isApprovedPartial =
         (r.status === 'approved-partial' && r.lvStart != null && r.lvEnd != null) ||
         (r.resolvedAction === 'approve' && r.isPartial && r.lvStart != null && r.lvEnd != null);
       if (isApprovedPartial) return true;
       // Preview partial leave
-      if (previewReq && String(r.id) === String(previewReqId) && r.isLeave && r.isPartial) {
+      if (previewReqIds.has(String(r.id)) && r.isLeave && r.isPartial) {
         const lvS = r.lvStart ?? parseTimeStr(r.from);
         const lvE = r.lvEnd ?? parseTimeStr(r.to);
         if (lvS !== null && lvE !== null) { r.lvStart = lvS; r.lvEnd = lvE; return true; }
@@ -2042,11 +2257,17 @@
         else if (count === 6){ bgColor = 'rgba(253,200,60,0.4)';  textColor = '#7a5500'; }
         else { const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55); bgColor=`rgba(91,155,213,${i})`;textColor='#1a4a7a'; }
       } else if (h24 === 20) {
-        // 2000-2100: Sun-Fri only; Saturday uses default
+        // 2000-2100: Sun-Fri: green>=8, red<=7; no last-hour rule; Saturday uses default
         if (isSaturday) {
           const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55);
           bgColor = `rgba(91,155,213,${i})`; textColor = '#1a4a7a';
         } else {
+          // Count everyone on shift — no last-hour exclusion
+          count = filteredShifts.filter(s => {
+            const overlapStart = Math.max(s.start, h);
+            const overlapEnd   = Math.min(s.end, h + 1);
+            return overlapEnd - overlapStart >= 0.5;
+          }).length;
           [bgColor, textColor] = hourColor(count, 7, null, 8);
         }
       } else if (h24 === 21) {
@@ -2098,11 +2319,12 @@
 
     const sortDate = getActiveDate();
     const defaultOrder = Object.entries(byEmployee).sort((a, b) => {
-      const aStart = Math.min(...a[1].map(s => s.start));
-      const bStart = Math.min(...b[1].map(s => s.start));
+      // Use _origStart if available so preview doesn't change row order
+      const aStart = Math.min(...a[1].map(s => s._origStart ?? s.start));
+      const bStart = Math.min(...b[1].map(s => s._origStart ?? s.start));
       if (aStart !== bStart) return aStart - bStart;
-      const aEnd = Math.max(...a[1].map(s => s.end));
-      const bEnd = Math.max(...b[1].map(s => s.end));
+      const aEnd = Math.max(...a[1].map(s => s._origStart !== undefined ? s._origStart + (s.end - s.start) : s.end));
+      const bEnd = Math.max(...b[1].map(s => s._origStart !== undefined ? s._origStart + (s.end - s.start) : s.end));
       return aEnd - bEnd;
     });
 
@@ -2499,6 +2721,31 @@
     renderRequests();
   }
 
+  function applyModalShiftTime() {
+    const shiftId = _modalShiftId;
+    const date = getActiveDate();
+    const shifts = schedulesByDate[date] || [];
+    const shift = shifts.find(s => String(s.id) === String(shiftId));
+    if (!shift) return;
+
+    const startRaw = document.getElementById('modalStartTime').value.trim();
+    const dur = parseFloat(document.getElementById('modalDuration').value);
+
+    // Parse HHMM start time
+    const m = startRaw.match(/^(\d{1,2}):?(\d{2})$/);
+    if (!m) { alert('Enter start time as HHMM, e.g. 0700'); return; }
+    if (isNaN(dur) || dur <= 0 || dur > 14) { alert('Duration must be between 1 and 14 hours.'); return; }
+
+    const newStart = parseInt(m[1]) + parseInt(m[2]) / 60;
+    const newEnd   = newStart + dur;
+
+    shift.start = newStart;
+    shift.end   = newEnd;
+
+    render();
+    _renderShiftModal();
+  }
+
   function openShiftModal(shiftId, e) {
     if (e) e.stopPropagation();
     hideTip();
@@ -2522,6 +2769,12 @@
     const durStr   = formatDuration(shift.end - shift.start);
     const typeTag  = shift.cic ? ' · CIC' : shift.dev ? ' · Trainee' : '';
     document.getElementById('modalMeta').textContent = `${startStr}–${endStr}  (${durStr})${typeTag}`;
+
+    // Populate shift time edit fields
+    const startH = Math.floor(shift.start % 24);
+    const startM = Math.round((shift.start % 1) * 60);
+    document.getElementById('modalStartTime').value = String(startH).padStart(2,'0') + String(startM).padStart(2,'0');
+    document.getElementById('modalDuration').value = shift.end - shift.start;
 
     // Trainee staffing checkbox
     const staffingEl = document.getElementById('modalStaffingCheck');
@@ -2774,7 +3027,18 @@
 
   // Patch render to auto-save on every call
   const _origRender = render;
-  render = function() { _origRender(); saveData(); };
+  render = function() {
+    _origRender();
+    saveData();
+    // Re-apply glow to all previewed bars (DOM was rebuilt)
+    const activeDate = getActiveDate();
+    previewReqIds.forEach(pid => {
+      const r = (requestsByDate[activeDate] || []).find(x => String(x.id) === pid);
+      if (!r) return;
+      document.querySelectorAll(`.shift-bar[data-name="${r.cpc}"]`)
+        .forEach(bar => bar.classList.add('visualize-glow'));
+    });
+  };
 
   // Also save when renderRequests is called (request state changes)
   const _origRenderRequests = renderRequests;
@@ -2783,11 +3047,13 @@
   // Safety net: save on page close/refresh
   window.addEventListener('beforeunload', saveData);
 
-  // ── Init ──
+  // Expose for browser extension injection
+  window.importFromText = importFromText;
+  window.importPayPeriodHTML = importPayPeriodHTML;
   (function init() {
     loadData();
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDateStr();
     const dateFilter = document.getElementById('dateFilter');
     if (dateFilter) {
       // If we have saved data, open to the most recent date; otherwise today
@@ -2803,7 +3069,38 @@
     const cb = document.querySelector('.chart-body');
     if (cb) ro.observe(cb);
 
-    setInterval(() => { if (getActiveDate() === new Date().toISOString().slice(0,10)) render(); }, 60000);
+    // Check for data sent from the browser extension
+    function checkExtensionData() {
+      // Direct injection fallback
+      if (window._sgPendingImport) {
+        const data = window._sgPendingImport;
+        window._sgPendingImport = null;
+        importFromText(data);
+        return;
+      }
+      // chrome.storage fallback (works when Shift Graph is served, not file://)
+      if (typeof chrome !== 'undefined' && chrome.storage) {
+        try {
+          chrome.storage.local.get('pendingImport', result => {
+            if (result && result.pendingImport && result.pendingImport.data) {
+              chrome.storage.local.remove('pendingImport');
+              importFromText(result.pendingImport.data);
+            }
+          });
+        } catch(e) {}
+      }
+    }
+    checkExtensionData();
+    window.addEventListener('focus', checkExtensionData);
+    // Also poll every 2s in case focus event missed
+    setInterval(checkExtensionData, 2000);
+
+    // Listen for data from browser extension (custom event fallback)
+    window.addEventListener('sgImport', e => {
+      if (e.detail) importFromText(e.detail);
+    });
+
+    setInterval(() => { if (getActiveDate() === localDateStr()) render(); }, 60000);
   })();
 </script>
 </body>
