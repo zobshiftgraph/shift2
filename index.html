@@ -860,7 +860,7 @@
     <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
     <button class="btn btn-ghost" onclick="pastePayPeriod()" id="ppBtn">📅 Paste Pay Period</button>
     <button class="btn btn-ghost" onclick="pastePendingRequests()" id="prBtn">📝 Paste Requests</button>
-    <button class="btn btn-ghost" onclick="copyBookmarklet()" id="bmBtn" title="Copy bookmarklet to clipboard">🔖 Copy Bookmarklet</button>
+    <button class="btn btn-ghost" onclick="downloadExtension()" title="Download browser extension">🔌 Download Extension</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
   </div>
 </header>
@@ -2086,15 +2086,13 @@
     const date = getActiveDate();
     const allReqs = requestsByDate[date] || [];
 
-    // Also pull in night shifts from the previous day that extend into this timeline
-    const prevDateObj2 = new Date(date + 'T12:00:00');
-    prevDateObj2.setDate(prevDateObj2.getDate() - 1);
-    const prevDateStr2 = prevDateObj2.toISOString().slice(0, 10);
-    const prevNightShifts = (schedulesByDate[prevDateStr2] || [])
-      .filter(s => s.start >= 20)                    // night shifts from prev day
-      .map(s => ({ ...s, start: s.start, end: s.end })); // times already >24 from parsing
-
-    const allShiftsForCount = [...shiftsForDate, ...prevNightShifts];
+    // Night shifts are stored on the previous calendar day (start>=20 gets split back one day on import)
+    // Pull them in for counting — they extend into today's timeline (end > 24)
+    const prevDateObj = new Date(date + 'T12:00:00');
+    prevDateObj.setDate(prevDateObj.getDate() - 1);
+    const prevDate = localDateStr(prevDateObj);
+    const prevNight = (schedulesByDate[prevDate] || []).filter(s => s.start >= 20 && s.end > 24);
+    const allShiftsForCount = [...shiftsForDate, ...prevNight];
 
     // Find all active preview requests
     const previewReqs = Array.from(previewReqIds)
@@ -2149,141 +2147,53 @@
     });
 
     // ── Hourly count row ──
+    // Rules:
+    //   - Must work ≥30 min of the hour to be counted
+    //   - 0400–1859: do NOT count someone in their last hour
+    //   - 1900–0000: count everyone with ≥30 min overlap, no last-hour exclusion
+    const countableShifts = effectiveShifts.filter(s =>
+      !s.cic && !(s.dev && !s.countForStaffing) && !wholeShiftLeaveNames.has(s.name)
+    );
+
     html += `<div style="position:relative;height:22px;margin-bottom:4px;">`;
     for (let h = VIEW_START; h < VIEW_END; h++) {
-      const slotMid = h + 0.5;
       const h24 = h % 24;
+      const isEve = h >= 19; // 1900 onward — no last-hour exclusion
 
-      // Counting rules by hour:
-      // 2100-2200: count all non-CIC, non-dev, ignore last hour rule
-      // 2200-0000: count all non-CIC, non-dev; night shifts (start>=20) ignore last hour rule;
-      //            daytime shifts still subject to last hour rule
-      // 0000+: prev-day night shifts not counted (they rolled over from yesterday)
-      // Other hours: normal rules
-      const isMidnightWindow = h24 === 22; // only 2200-2300 slot
-      const isPostMidnight   = h24 === 0 || h24 === 23 || h >= 23;
-      const is2100slot       = h24 === 21;
-
-      let count;
-      if (isPostMidnight) {
-        // 0000+: only count night shifts that actually START on this day (start < 20 not applicable)
-        // prev-day night shifts (from prevNightShifts) should not be counted here
-        count = filteredShifts.filter(s => {
-          const overlapStart = Math.max(s.start, h);
-          const overlapEnd   = Math.min(s.end - 1, h + 1);
-          return overlapEnd - overlapStart >= 0.5;
-        }).length;
-      } else if (isMidnightWindow) {
-        // 2200-2300: night shifts (start>=20) count with any overlap; daytime shifts keep last-hour rule
-        count = effectiveShifts.filter(s => {
-          if (wholeShiftLeaveNames.has(s.name)) return false;
-          if (s.cic || s.dev) return false;
-          const isNightShift = s.start >= 20;
-          if (isNightShift) {
-            return s.start < h + 1 && s.end > h; // any overlap
-          }
-          const overlapStart = Math.max(s.start, h);
-          const overlapEnd   = Math.min(s.end - 1, h + 1);
-          return overlapEnd - overlapStart >= 0.5;
-        }).length;
-      } else if (is2100slot) {
-        // 2100-2200: all except CIC and dev, ignore last hour rule
-        count = filteredShifts.filter(s => {
-          const overlapStart = Math.max(s.start, h);
-          const overlapEnd   = Math.min(s.end, h + 1);
-          return overlapEnd - overlapStart >= 0.5;
-        }).length;
-      } else {
-        // Normal hours: exclude last hour
-        count = filteredShifts.filter(s => {
-          const overlapStart = Math.max(s.start, h);
-          const overlapEnd   = Math.min(s.end - 1, h + 1);
-          return overlapEnd - overlapStart >= 0.5;
-        }).length;
-      }
-
-      // CIC addition for 2200+ is now handled in the isMidnightWindow branch above
-
-      // Subtract those on approved partial leave — but only if they were being counted
-      // (i.e. the leave slot is not already their last hour, which is excluded from count)
-      const onLeave = approvedPartialLeaves.filter(lv => {
-        const overlapStart = Math.max(lv.lvStart, h);
-        const overlapEnd = Math.min(lv.lvEnd, h + 1);
-        if (overlapEnd - overlapStart < 0.5) return false;
-        // Find their effective shift to check if this is their last hour
-        const theirShift = filteredShifts.find(s => s.name === lv.cpc);
-        if (!theirShift) return false;
-        // They are in their last hour if the slot overlaps [shiftEnd-1, shiftEnd]
-        const lastHourStart = theirShift.end - 1;
-        const lastHourOverlap = Math.min(h + 1, theirShift.end) - Math.max(h, lastHourStart);
-        const inLastHour = lastHourOverlap >= 0.5;
-        return !inLastHour; // only subtract if they were actually counted
+      let count = countableShifts.filter(s => {
+        const os = Math.max(s.start, h);
+        const oe = Math.min(s.end, h + 1);
+        if (oe - os < 0.5) return false;
+        if (!isEve && s.end > h && s.end <= h + 1) return false;
+        return true;
       }).length;
-      count = Math.max(0, count - onLeave);
 
-      const leftPct = ((h - VIEW_START) / span) * 100;
+      // Subtract approved partial leave if person was counted this hour
+      count -= approvedPartialLeaves.filter(lv => {
+        const matchedShift = countableShifts.find(s => s.name === lv.cpc);
+        if (!matchedShift) return false;
+        // Only subtract if person was actually counted this hour
+        const shiftOs = Math.max(matchedShift.start, h);
+        const shiftOe = Math.min(matchedShift.end, h + 1);
+        const shiftCounted = shiftOe - shiftOs >= 0.5 && !(matchedShift.end > h && matchedShift.end <= h + 1 && !isEve);
+        if (!shiftCounted) return false;
+        const os = Math.max(lv.lvStart, h);
+        const oe = Math.min(lv.lvEnd, h + 1);
+        return oe - os >= 0.5;
+      }).length;
+      count = Math.max(0, count);
+
+      // Position at left edge of hour slot — sits between the two hour labels
+      const leftPct  = ((h - VIEW_START) / span) * 100;
       const widthPct = (1 / span) * 100;
 
-      // Day of week for threshold rules (0=Sun, 6=Sat)
-      const dow = new Date(getActiveDate() + 'T12:00:00').getDay();
-      const isSaturday = dow === 6;
-      const isSunday   = dow === 0;
-
-      // Helper: returns [bgColor, textColor] for a count given thresholds
-      function hourColor(cnt, redMax, yellowVal, greenMin) {
-        // yellowVal can be a number or null (no yellow zone)
-        if (cnt === 0)                          return ['transparent', 'transparent'];
-        if (greenMin !== null && cnt >= greenMin) return ['rgba(34,180,100,0.3)', '#0a5c28'];
-        if (yellowVal !== null && cnt === yellowVal) return ['rgba(253,200,60,0.4)', '#7a5500'];
-        if (cnt <= redMax)                       return ['rgba(217,79,110,0.25)', '#9b1a34'];
-        // between yellow and green (e.g. count=9 when green is 10)
-        const intensity = Math.min(0.15 + (cnt / Math.max(shiftsForDate.length, 1)) * 0.4, 0.55);
-        return [`rgba(91,155,213,${intensity})`, '#1a4a7a'];
-      }
-
+      // Color: just show count as blue, intensity by count
       let bgColor, textColor;
       if (count === 0) {
         bgColor = 'transparent'; textColor = 'transparent';
-      } else if (h24 === 6) {
-        // 0600-0700: Sun-Fri: green>=4, red<4
-        // (Saturday not specified — use same rule)
-        [bgColor, textColor] = hourColor(count, 3, null, 4);
-      } else if (h24 === 7) {
-        // 0700-0800: Sun-Fri: green>=6, yellow=5, red<=4
-        [bgColor, textColor] = hourColor(count, 4, 5, 6);
-      } else if (h24 >= 8 && h24 < 20) {
-        // 0800-2000: existing rules (red<=5, yellow=6, blue>=7)
-        if (count <= 5)      { bgColor = 'rgba(217,79,110,0.25)'; textColor = '#9b1a34'; }
-        else if (count === 6){ bgColor = 'rgba(253,200,60,0.4)';  textColor = '#7a5500'; }
-        else { const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55); bgColor=`rgba(91,155,213,${i})`;textColor='#1a4a7a'; }
-      } else if (h24 === 20) {
-        // 2000-2100: Sun-Fri: green>=8, red<=7; no last-hour rule; Saturday uses default
-        if (isSaturday) {
-          const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55);
-          bgColor = `rgba(91,155,213,${i})`; textColor = '#1a4a7a';
-        } else {
-          // Count everyone on shift — no last-hour exclusion
-          count = filteredShifts.filter(s => {
-            const overlapStart = Math.max(s.start, h);
-            const overlapEnd   = Math.min(s.end, h + 1);
-            return overlapEnd - overlapStart >= 0.5;
-          }).length;
-          [bgColor, textColor] = hourColor(count, 7, null, 8);
-        }
-      } else if (h24 === 21) {
-        // 2100-2200: all days green>=5, red<=4
-        [bgColor, textColor] = hourColor(count, 4, null, 5);
-      } else if (h24 === 22) {
-        // 2200-2300: Sun-Fri only; Saturday uses default
-        if (isSaturday) {
-          const i = Math.min(0.15 + (count/Math.max(shiftsForDate.length,1))*0.4,0.55);
-          bgColor = `rgba(91,155,213,${i})`; textColor = '#1a4a7a';
-        } else {
-          [bgColor, textColor] = hourColor(count, 2, null, 3);
-        }
       } else {
-        const intensity = count === 0 ? 0 : Math.min(0.15 + (count / Math.max(shiftsForDate.length,1)) * 0.4, 0.55);
-        bgColor = count > 0 ? `rgba(91,155,213,${intensity})` : 'transparent';
+        const intensity = Math.min(0.15 + (count / Math.max(countableShifts.length, 1)) * 0.5, 0.65);
+        bgColor = `rgba(91,155,213,${intensity})`;
         textColor = '#1a4a7a';
       }
 
@@ -2300,7 +2210,6 @@
       </div>`;
     }
     html += `</div>`;
-
     html += `<div class="grid-and-bars" style="position:relative;">`;
 
     // Single full-height current time line over the entire chart
@@ -2617,7 +2526,7 @@
 
     // Day = ends at 18:59 or earlier; Eve = ends 19:00–00:00; exclude overnight (start >= 20)
     const dayCount = shifts.filter(s => !s.dev && !s.cic && s.start < 20 && s.end <= 19).length;
-    const eveCount = shifts.filter(s => !s.dev && !s.cic && s.start < 20 && s.end > 19 && s.end <= 24).length;
+    const eveCount = shifts.filter(s => !s.dev && !s.cic && s.start < 20 && s.end > 19).length;
 
     // Determine day of week for threshold rules
     const dow = new Date(activeDate + 'T12:00:00').getDay(); // 0=Sun, 1=Mon...6=Sat
