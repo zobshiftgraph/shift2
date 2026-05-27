@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Shift Visualizer</title>
+  <title>Shift Graph</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <style>
     :root {
@@ -860,7 +860,6 @@
     <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
     <button class="btn btn-ghost" onclick="pastePayPeriod()" id="ppBtn">📅 Paste Pay Period</button>
     <button class="btn btn-ghost" onclick="pastePendingRequests()" id="prBtn">📝 Paste Requests</button>
-    <button class="btn btn-ghost" onclick="downloadExtension()" title="Download browser extension">🔌 Download Extension</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
   </div>
 </header>
@@ -1210,9 +1209,7 @@
 
         if (!schedulesByDate[targetDate]) schedulesByDate[targetDate] = [];
 
-        const exists = schedulesByDate[targetDate].some(s =>
-          s.name === initials && Math.abs(s.start - info.start) < 0.01 && Math.abs(s.end - info.end) < 0.01
-        );
+        const exists = schedulesByDate[targetDate].some(s => s.name === initials);
         if (!exists) {
           schedulesByDate[targetDate].push({
             id: Date.now() + Math.random(),
@@ -1594,21 +1591,16 @@
     const targetDateObj = new Date(targetDate + 'T12:00:00');
     const prevDateObj = new Date(targetDateObj);
     prevDateObj.setDate(prevDateObj.getDate() - 1);
-    const prevDate = prevDateObj.toISOString().slice(0, 10);
+    const prevDate = localDateStr(prevDateObj);
 
-    const currentDayShifts = [];
-    const prevDayShifts = [];
-    parsed.forEach(s => {
-      const isNight = s.start >= 20 || s.start <= 1;
-      if (isNight) prevDayShifts.push(s);
-      else currentDayShifts.push(s);
-    });
+    const currentDayShifts = parsed.filter(s => s.start < 20);
+    const prevDayShifts    = parsed.filter(s => s.start >= 20);
 
     if (currentDayShifts.length > 0) schedulesByDate[targetDate] = currentDayShifts;
     if (prevDayShifts.length > 0) {
       if (!schedulesByDate[prevDate]) schedulesByDate[prevDate] = [];
       schedulesByDate[prevDate] = [
-        ...schedulesByDate[prevDate].filter(s => !(s.start >= 20 || s.start <= 1)),
+        ...schedulesByDate[prevDate].filter(s => s.start < 20),
         ...prevDayShifts
       ];
     }
@@ -1625,7 +1617,6 @@
     render();
     renderRequests();
 
-    const nightNote = prevDayShifts.length > 0 ? `, ${prevDayShifts.length} night shift${prevDayShifts.length > 1 ? 's' : ''} → ${prevDate}` : '';
     showPasteFeedback(btn, '', false); // silent on success
   }
 
@@ -2086,113 +2077,83 @@
     const date = getActiveDate();
     const allReqs = requestsByDate[date] || [];
 
-    // Night shifts are stored on the previous calendar day (start>=20 gets split back one day on import)
-    // Pull them in for counting — they extend into today's timeline (end > 24)
-    const prevDateObj = new Date(date + 'T12:00:00');
-    prevDateObj.setDate(prevDateObj.getDate() - 1);
-    const prevDate = localDateStr(prevDateObj);
-    const prevNight = (schedulesByDate[prevDate] || []).filter(s => s.start >= 20 && s.end > 24);
-    const allShiftsForCount = [...shiftsForDate, ...prevNight];
+    // Each shift counts only for the day it starts on — no pulling from previous day
+    const allShifts = [...shiftsForDate];
 
-    // Find all active preview requests
+    // Apply approved/previewed shift changes and collect whole-shift leave names
     const previewReqs = Array.from(previewReqIds)
       .map(pid => allReqs.find(r => String(r.id) === pid))
       .filter(Boolean);
 
-    // Build effective shift list: apply approved shift changes + all previewed shift changes
-    const effectiveShifts = allShiftsForCount.map(s => {
-      // Preview shift changes take priority
+    const onLeave = new Set([
+      ...allReqs.filter(r => r.isLeave && !r.isPartial && r.resolvedAction === 'approve').map(r => r.cpc),
+      ...previewReqs.filter(r => r.isLeave && !r.isPartial).map(r => r.cpc),
+    ]);
+
+    const effectiveShifts = allShifts.map(s => {
       const pr = previewReqs.find(r => isShiftChangeType(r.type) && r.cpc === s.name && r.to);
-      if (pr) {
-        const info = parseShiftCode(pr.to.replace(/\s/g,''));
-        if (info) return { ...s, start: info.start, end: info.end };
-      }
-      // Approved shift change
-      const shiftChg = allReqs.find(r =>
-        r.cpc === s.name && isShiftChangeType(r.type) && r.resolvedAction === 'approve'
-      );
-      if (shiftChg && shiftChg.to) {
-        const info = parseShiftCode(shiftChg.to.replace(/\s/g,''));
-        if (info) return { ...s, start: info.start, end: info.end };
-      }
+      if (pr) { const i = parseShiftCode(pr.to.replace(/\s/g,'')); if (i) return {...s, start:i.start, end:i.end}; }
+      const ap = allReqs.find(r => r.cpc === s.name && isShiftChangeType(r.type) && r.resolvedAction === 'approve' && r.to);
+      if (ap) { const i = parseShiftCode(ap.to.replace(/\s/g,'')); if (i) return {...s, start:i.start, end:i.end}; }
       return s;
     });
 
-    // For whole-shift leave that's approved or previewed: remove from effective shifts
-    const wholeShiftLeaveNames = new Set(allReqs
-      .filter(r => r.isLeave && !r.isPartial && r.resolvedAction === 'approve')
-      .map(r => r.cpc)
+    // Countable = not CIC, not dev (unless countForStaffing checked), not on whole-shift leave
+    const countable = effectiveShifts.filter(s =>
+      !s.cic && !(s.dev && !s.countForStaffing) && !onLeave.has(s.name)
     );
-    previewReqs.filter(r => r.isLeave && !r.isPartial).forEach(r => wholeShiftLeaveNames.add(r.cpc));
 
-    const filteredShifts = effectiveShifts.filter(s =>
-      !wholeShiftLeaveNames.has(s.name) && !s.cic && s.start < 20 &&
-      (!s.dev || s.countForStaffing)
+    // Approved partial leaves — exclude anyone already on whole-shift leave
+    const partialLeaves = allReqs.filter(r =>
+      r.isLeave && r.isPartial &&
+      r.lvStart != null && r.lvEnd != null &&
+      (r.resolvedAction === 'approve' || r.status === 'approved-partial') &&
+      !onLeave.has(r.cpc) // don't double-subtract whole-shift leave people
     );
-    const cicLateShifts = effectiveShifts.filter(s => s.cic && s.end > 22 && !wholeShiftLeaveNames.has(s.name));
-
-    // Partial leaves: approved-partial from import, manually approved, or previewed
-    const approvedPartialLeaves = allReqs.filter(r => {
-      const isApprovedPartial =
-        (r.status === 'approved-partial' && r.lvStart != null && r.lvEnd != null) ||
-        (r.resolvedAction === 'approve' && r.isPartial && r.lvStart != null && r.lvEnd != null);
-      if (isApprovedPartial) return true;
-      // Preview partial leave
-      if (previewReqIds.has(String(r.id)) && r.isLeave && r.isPartial) {
-        const lvS = r.lvStart ?? parseTimeStr(r.from);
-        const lvE = r.lvEnd ?? parseTimeStr(r.to);
-        if (lvS !== null && lvE !== null) { r.lvStart = lvS; r.lvEnd = lvE; return true; }
-      }
-      return false;
-    });
 
     // ── Hourly count row ──
-    // Rules:
-    //   - Must work ≥30 min of the hour to be counted
-    //   - 0400–1859: do NOT count someone in their last hour
-    //   - 1900–0000: count everyone with ≥30 min overlap, no last-hour exclusion
-    const countableShifts = effectiveShifts.filter(s =>
-      !s.cic && !(s.dev && !s.countForStaffing) && !wholeShiftLeaveNames.has(s.name)
-    );
+    const dow = new Date(date + 'T12:00:00').getDay();
+    const isWeekday = dow >= 1 && dow <= 5;
+    const minStaff = isWeekday ? { 6:4, 7:6, 20:8, 21:5, 22:3 } : {};
 
     html += `<div style="position:relative;height:22px;margin-bottom:4px;">`;
     for (let h = VIEW_START; h < VIEW_END; h++) {
       const h24 = h % 24;
-      const isEve = h >= 19; // 1900 onward — no last-hour exclusion
+      const isEve = h >= 19;
 
-      let count = countableShifts.filter(s => {
-        const os = Math.max(s.start, h);
-        const oe = Math.min(s.end, h + 1);
-        if (oe - os < 0.5) return false;
-        if (!isEve && s.end > h && s.end <= h + 1) return false;
+      // Count everyone working ≥30 min this hour
+      // Before 1900: exclude someone if this hour is their last hour (shift ends within this slot)
+      let count = countable.filter(s => {
+        const overlap = Math.min(s.end, h + 1) - Math.max(s.start, h);
+        if (overlap < 0.5) return false;
+        if (!isEve && s.end > h && s.end <= h + 1) return false; // last hour
         return true;
       }).length;
 
-      // Subtract approved partial leave if person was counted this hour
-      count -= approvedPartialLeaves.filter(lv => {
-        const matchedShift = countableShifts.find(s => s.name === lv.cpc);
-        if (!matchedShift) return false;
-        // Only subtract if person was actually counted this hour
-        const shiftOs = Math.max(matchedShift.start, h);
-        const shiftOe = Math.min(matchedShift.end, h + 1);
-        const shiftCounted = shiftOe - shiftOs >= 0.5 && !(matchedShift.end > h && matchedShift.end <= h + 1 && !isEve);
-        if (!shiftCounted) return false;
-        const os = Math.max(lv.lvStart, h);
-        const oe = Math.min(lv.lvEnd, h + 1);
-        return oe - os >= 0.5;
+      // Subtract anyone on partial leave for ≥30 min this hour
+      // Only subtract if they were actually counted (i.e. in countable and passed the count filter)
+      count -= partialLeaves.filter(lv => {
+        const shift = countable.find(s => s.name === lv.cpc);
+        if (!shift) return false; // not in countable, already excluded
+        // Check they were actually counted this hour
+        const shiftOverlap = Math.min(shift.end, h + 1) - Math.max(shift.start, h);
+        if (shiftOverlap < 0.5) return false;
+        if (!isEve && shift.end > h && shift.end <= h + 1) return false; // last hour, wasn't counted
+        // Check leave overlaps this hour ≥30 min
+        return Math.min(lv.lvEnd, h + 1) - Math.max(lv.lvStart, h) >= 0.5;
       }).length;
       count = Math.max(0, count);
 
-      // Position at left edge of hour slot — sits between the two hour labels
       const leftPct  = ((h - VIEW_START) / span) * 100;
       const widthPct = (1 / span) * 100;
 
-      // Color: just show count as blue, intensity by count
       let bgColor, textColor;
       if (count === 0) {
         bgColor = 'transparent'; textColor = 'transparent';
+      } else if (minStaff[h24] !== undefined && count < minStaff[h24]) {
+        bgColor = 'rgba(217,79,110,0.35)'; textColor = '#9b1a34';
       } else {
-        const intensity = Math.min(0.15 + (count / Math.max(countableShifts.length, 1)) * 0.5, 0.65);
+        const intensity = Math.min(0.15 + (count / Math.max(countable.length, 1)) * 0.5, 0.65);
         bgColor = `rgba(91,155,213,${intensity})`;
         textColor = '#1a4a7a';
       }
@@ -2247,6 +2208,8 @@
       sortedEmployees = [...ordered, ...newRows];
     } else {
       sortedEmployees = defaultOrder;
+      // Save the default order so it's frozen for future renders (including previews)
+      rowOrderByDate[sortDate] = defaultOrder.map(([k]) => k);
     }
 
     sortedEmployees.forEach(([rowKey, empShifts]) => {
@@ -2525,8 +2488,8 @@
     }
 
     // Day = ends at 18:59 or earlier; Eve = ends 19:00–00:00; exclude overnight (start >= 20)
-    const dayCount = shifts.filter(s => !s.dev && !s.cic && s.start < 20 && s.end <= 19).length;
-    const eveCount = shifts.filter(s => !s.dev && !s.cic && s.start < 20 && s.end > 19).length;
+    const dayCount = shifts.filter(s => !s.dev && !s.cic && s.end >= 12 && s.end < 19).length;
+    const eveCount = shifts.filter(s => !s.dev && !s.cic && s.end >= 19 && s.end <= 24).length;
 
     // Determine day of week for threshold rules
     const dow = new Date(activeDate + 'T12:00:00').getDay(); // 0=Sun, 1=Mon...6=Sat
