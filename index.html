@@ -775,6 +775,7 @@
             <select id="addLeaveType" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:12px;padding:5px 8px;border-radius:6px;outline:none;">
               <option value="A">Annual (A)</option>
               <option value="SL">Sick (SL)</option>
+              <option value="BL">Blood (BL)</option>
               <option value="ADMIN">Admin</option>
               <option value="TRNG">Training</option>
               <option value="CTU">Comp Used (CTU)</option>
@@ -858,8 +859,8 @@
       </div>
     </div>
     <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
-    <button class="btn btn-ghost" onclick="pastePayPeriod()" id="ppBtn">📅 Paste Pay Period</button>
-    <button class="btn btn-ghost" onclick="pastePendingRequests()" id="prBtn">📝 Paste Requests</button>
+    <button class="btn btn-ghost" onclick="undoAction()" id="undoBtn" disabled title="Undo">↩ Undo</button>
+    <button class="btn btn-ghost" onclick="redoAction()" id="redoBtn" disabled title="Redo">↪ Redo</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
   </div>
 </header>
@@ -922,6 +923,38 @@
   // rowOrderByDate: { 'YYYY-MM-DD': ['rowKey1','rowKey2',...] } — manual drag order
   const rowOrderByDate = {};
   const previewReqIds = new Set(); // requests currently being previewed
+
+  // ── Undo / Redo ──
+  const undoStack = [];
+  const redoStack = [];
+
+  function snapshot(label) {
+    undoStack.push({ label, s: JSON.parse(JSON.stringify(schedulesByDate)), r: JSON.parse(JSON.stringify(requestsByDate)) });
+    redoStack.length = 0;
+    if (undoStack.length > 50) undoStack.shift();
+    updateUndoRedoBtns();
+  }
+
+  function updateUndoRedoBtns() {
+    const u = document.getElementById('undoBtn');
+    const rd = document.getElementById('redoBtn');
+    if (u)  { u.disabled  = !undoStack.length; u.title  = undoStack.length  ? `Undo: ${undoStack[undoStack.length-1].label}`  : 'Nothing to undo'; }
+    if (rd) { rd.disabled = !redoStack.length; rd.title = redoStack.length ? `Redo: ${redoStack[redoStack.length-1].label}` : 'Nothing to redo'; }
+  }
+
+  function applySnap(snap, pushTo) {
+    pushTo.push({ label: snap.label, s: JSON.parse(JSON.stringify(schedulesByDate)), r: JSON.parse(JSON.stringify(requestsByDate)) });
+    Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
+    Object.assign(schedulesByDate, snap.s);
+    Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
+    Object.assign(requestsByDate, snap.r);
+    previewReqIds.clear();
+    render(); renderRequests();
+    updateUndoRedoBtns();
+  }
+
+  function undoAction() { if (undoStack.length) applySnap(undoStack.pop(), redoStack); }
+  function redoAction() { if (redoStack.length) applySnap(redoStack.pop(), undoStack); }
   let colorMap = {};
   const BAR_COLOR = { bg: '#5b9bd5', text: '#fff' };
   const DEV_COLOR = { bg: '#7c5cbf', text: '#fff' };
@@ -1201,10 +1234,15 @@
         if (!info) continue;
 
         let targetDate = dates[d];
-        if (info.start >= 20) {
+        if (info.start >= 20 || info.start < 4) {
           const prev = new Date(dates[d] + 'T12:00:00');
           prev.setDate(prev.getDate() - 1);
           targetDate = prev.toISOString().slice(0, 10);
+          // Offset early-morning shifts by +24 so they render on prev day's extended timeline
+          if (info.start < 4) {
+            info.start += 24;
+            info.end += 24;
+          }
         }
 
         if (!schedulesByDate[targetDate]) schedulesByDate[targetDate] = [];
@@ -1539,6 +1577,7 @@
   }
 
   function importFromText(raw) {
+    snapshot('Paste Schedule');
     const btn = document.getElementById('pasteBtn');
 
     // Extract date
@@ -1593,10 +1632,14 @@
     prevDateObj.setDate(prevDateObj.getDate() - 1);
     const prevDate = localDateStr(prevDateObj);
 
-    const currentDayShifts = parsed.filter(s => s.start < 20);
-    const prevDayShifts    = parsed.filter(s => s.start >= 20);
+    const currentDayShifts = parsed.filter(s => s.start >= 4 && s.start < 20);
+    const prevDayShifts    = parsed.filter(s => s.start >= 20 || s.start < 4).map(s =>
+      s.start < 4 ? { ...s, start: s.start + 24, end: s.end + 24 } : s
+    );
 
-    if (currentDayShifts.length > 0) schedulesByDate[targetDate] = currentDayShifts;
+    // Keep any existing overnight shifts on this date (start >= 20), replace day shifts
+    const existingNightShifts = (schedulesByDate[targetDate] || []).filter(s => s.start >= 20);
+    if (currentDayShifts.length > 0) schedulesByDate[targetDate] = [...existingNightShifts, ...currentDayShifts];
     if (prevDayShifts.length > 0) {
       if (!schedulesByDate[prevDate]) schedulesByDate[prevDate] = [];
       schedulesByDate[prevDate] = [
@@ -1623,6 +1666,7 @@
   // ── Leave type lookup ──
   const LEAVE_TYPES = {
     'A':'Annual Leave','ADMIN':'Administrative Leave','AWOL':'Absent Without Leave',
+    'BL':'Blood Leave',
     'TRNG':'Class Room Training','BL':'Blood Leave','CL':'Court Leave',
     'COS':'Change of Station','CTU':'Comp Time Used','XTU':'Credit Time Used',
     'FL':'Funeral Leave','FRLO':'Furlough','FSL':'Family Sick Leave',
@@ -1635,7 +1679,7 @@
   const LEAVE_CODES = new Set(Object.keys(LEAVE_TYPES));
 
   function isLeaveType(type) {
-    return LEAVE_CODES.has(type) || /^(Annual|Sick|Admin|TRNG|AWOL|BL|CL|COS|CTU|XTU|FL|FRLO|FSL|HL|JURY|LWOP|MIL|SL|TOA|WX|X)$/i.test(type);
+    return LEAVE_CODES.has(type) || /^(Annual|Sick|Admin|TRNG|AWOL|BL|Blood|CL|COS|CTU|XTU|FL|FRLO|FSL|HL|JURY|LWOP|MIL|SL|TOA|WX|X)$/i.test(type);
   }
 
   function isShiftChangeType(type) {
@@ -1830,6 +1874,7 @@
     const reqs = requestsByDate[date] || [];
     const req = reqs.find(r => String(r.id) === String(id));
     if (!req) return;
+    snapshot(`${action === 'approve' ? 'Approve' : 'Deny'} ${req.type} – ${req.cpc}`);
     req.resolvedAction = action;
     req._expanded = false; // always collapse on resolve
 
@@ -1864,6 +1909,7 @@
     const reqs = requestsByDate[date] || [];
     const req = reqs.find(r => String(r.id) === String(id));
     if (!req) return;
+    snapshot(`Undo ${req.type} – ${req.cpc}`);
 
     // If it was an approved shift change, restore original shift times
     if (req.resolvedAction === 'approve' && isShiftChangeType(req.type) && req._origStart !== undefined) {
@@ -1960,6 +2006,7 @@
   }
 
   function clearAllDays() {
+    snapshot('Clear All Days');
     if (!confirm('Clear all schedules and requests for every day?')) return;
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
     Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
@@ -2208,9 +2255,13 @@
       sortedEmployees = [...ordered, ...newRows];
     } else {
       sortedEmployees = defaultOrder;
-      // Save the default order so it's frozen for future renders (including previews)
       rowOrderByDate[sortDate] = defaultOrder.map(([k]) => k);
     }
+
+    // Always force overnight shifts (start >= 20) to the bottom
+    const dayRows   = sortedEmployees.filter(([, shifts]) => shifts.every(s => (s._origStart ?? s.start) < 20));
+    const nightRows = sortedEmployees.filter(([, shifts]) => shifts.some(s  => (s._origStart ?? s.start) >= 20));
+    sortedEmployees = [...dayRows, ...nightRows];
 
     sortedEmployees.forEach(([rowKey, empShifts]) => {
       const name = rowKey.replace(/\u200B/g, '');
@@ -2249,6 +2300,13 @@
         const col = getColor(shift);
         const duration = shift.end - shift.start;
         const label = `${formatTime(shift.start % 24)}–${formatTime(shift.end % 24)}`;
+
+        // Check if a whole-shift leave is being previewed for this person
+        const wholeLeavePreview = Array.from(previewReqIds).some(pid => {
+          const r = (requestsByDate[date] || []).find(x => String(x.id) === pid);
+          return r && r.cpc === name && r.isLeave && !r.isPartial;
+        });
+        const barBg = wholeLeavePreview ? 'rgba(130,130,145,0.6)' : col.bg;
 
         // Green TOS overlays — only the TOS portions outside the original shift
         let tosOverlays = '';
@@ -2299,11 +2357,17 @@
           }
         }
 
-        // Grey LV overlay — approved-partial from import OR manually approved partial leave
-        const partialLeaves = (requestsByDate[date] || []).filter(r =>
-          r.cpc === name && r.lvStart != null && r.lvEnd != null &&
-          (r.status === 'approved-partial' || (r.resolvedAction === 'approve' && r.isPartial))
-        );
+        // Grey LV overlay — approved-partial from import, manually approved partial leave, or previewed
+        const partialLeaves = (requestsByDate[date] || []).filter(r => {
+          if (!r.isPartial || r.cpc !== name) return false;
+          const isApproved = r.status === 'approved-partial' || (r.resolvedAction === 'approve' && r.isPartial);
+          const isPreviewed = previewReqIds.has(String(r.id));
+          if (!isApproved && !isPreviewed) return false;
+          // Ensure lvStart/lvEnd are populated (may need to parse from from/to)
+          if (r.lvStart == null) r.lvStart = parseTimeStr(r.from);
+          if (r.lvEnd   == null) r.lvEnd   = parseTimeStr(r.to);
+          return r.lvStart != null && r.lvEnd != null;
+        });
         let lvOverlays = '';
         partialLeaves.forEach(lv => {
           const lvVisStart = Math.max(lv.lvStart, visStart);
@@ -2444,7 +2508,7 @@
         });
 
         html += `<div class="shift-bar"
-          style="left:${left}%;width:${width}%;background:${col.bg};color:${col.text};overflow:${hasNarrowLV ? 'visible' : 'hidden'};"
+          style="left:${left}%;width:${width}%;background:${barBg};color:${col.text};overflow:${hasNarrowLV ? 'visible' : 'hidden'};"
           data-id="${shift.id}" data-name="${name}" data-time="${label}"
           data-dur="${formatDuration(duration)}"
           data-start="${shift.start}" data-end="${shift.end}"
@@ -2505,19 +2569,17 @@
 
     function staffColor(count, isWeekendRules) {
       if (isWeekendRules) {
-        if (count >= 9)  return '#22a06b'; // green
-        if (count === 7) return '#e09000'; // yellow
-        return '#d94f6e';                  // red (6 or below)
+        if (count >= 8)  return '#22a06b'; // green
+        return '#d94f6e';                  // red
       } else {
-        if (count >= 10) return '#22a06b'; // green
-        if (count === 8) return '#e09000'; // yellow (8 only, 9 is also yellow? re-read: >=10 green, 8 yellow, <=7 red — 9 is neither so default text)
-        if (count === 9) return 'var(--text)'; // 9 is not explicitly colored — use default
-        return '#d94f6e';                  // red (7 or below)
+        if (count >= 9) return '#22a06b';  // green
+        if (count === 8) return 'var(--text)'; // neutral
+        return '#d94f6e';                  // red
       }
     }
 
-    const dayWeekendRules = isWeekend; // Sat and Sun day both use weekend rules
-    const eveWeekendRules = isSat;     // Sat eve uses weekend rules; Sun eve uses weekday rules
+    const dayWeekendRules = isSat; // Saturday only
+    const eveWeekendRules = isSat;
 
     const dayColor = staffColor(dayCount, dayWeekendRules);
     const eveColor = staffColor(eveCount, eveWeekendRules);
@@ -2599,6 +2661,7 @@
     const shifts = schedulesByDate[date] || [];
     const shift = shifts.find(s => String(s.id) === String(shiftId));
     if (!shift) return;
+    snapshot(`Edit shift ${shift.name}`);
 
     const startRaw = document.getElementById('modalStartTime').value.trim();
     const dur = parseFloat(document.getElementById('modalDuration').value);
@@ -2924,6 +2987,7 @@
   window.importPayPeriodHTML = importPayPeriodHTML;
   (function init() {
     loadData();
+    updateUndoRedoBtns();
 
     const today = localDateStr();
     const dateFilter = document.getElementById('dateFilter');
