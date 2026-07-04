@@ -326,10 +326,10 @@
       align-items: center;
       justify-content: center;
       padding: 0 6px;
-      font-size: 16px; /* overridden by fitRows inline style */
-      font-weight: 600;
+      font-size: 8px; /* overridden by fitRows inline style */
+      font-weight: 700;
       font-family: var(--font-display);
-      letter-spacing: 0.1px;
+      letter-spacing: 0.2px;
       cursor: pointer;
       transition: filter 0.15s, transform 0.15s, box-shadow 0.15s;
       white-space: nowrap;
@@ -351,10 +351,13 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 10px;
-      opacity: 0.9;
+      font-size: inherit;
+      font-weight: 900;
+      opacity: 1;
       text-align: center;
       width: 100%;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      letter-spacing: 0.2px;
     }
 
     .delete-btn {
@@ -859,6 +862,7 @@
       </div>
     </div>
     <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
+    <button class="btn btn-ghost" onclick="pasteWX()" id="wxBtn">✓ Paste Pre-Duty WX</button>
     <button class="btn btn-ghost" onclick="undoAction()" id="undoBtn" disabled title="Undo">↩ Undo</button>
     <button class="btn btn-ghost" onclick="redoAction()" id="redoBtn" disabled title="Redo">↪ Redo</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
@@ -923,6 +927,60 @@
   // rowOrderByDate: { 'YYYY-MM-DD': ['rowKey1','rowKey2',...] } — manual drag order
   const rowOrderByDate = {};
   const previewReqIds = new Set(); // requests currently being previewed
+  const wxInitials = new Set();    // initials marked with WX checkmark
+
+  // ── WX Mark ──
+  async function pasteWX() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text.trim()) { applyWX(text); return; }
+    } catch(e) {}
+    // Fallback dialog
+    const overlay = document.createElement('div');
+    overlay.id = 'wxOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:90%;max-width:460px;box-shadow:0 12px 40px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
+        <div style="font-size:16px;font-weight:700;margin-bottom:6px;">✓ Paste Pre-Duty WX</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+          Press <strong>Ctrl+V</strong> to paste — initials found will be marked with ✓ WX on the graph.
+        </div>
+        <textarea id="wxTA" style="width:100%;height:60px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-mono);font-size:12px;padding:10px;resize:none;outline:none;opacity:0.5;" placeholder="Waiting for paste (Ctrl+V)..."></textarea>
+        <div style="margin-top:12px;"><button class="btn btn-ghost" onclick="document.getElementById('wxOverlay').remove()">Cancel</button></div>
+      </div>`;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    const ta = document.getElementById('wxTA');
+    if (ta) {
+      ta.focus();
+      ta.addEventListener('paste', () => {
+        setTimeout(() => {
+          const text = ta.value;
+          overlay.remove();
+          applyWX(text);
+        }, 50);
+      });
+    }
+  }
+
+  function applyWX(text) {
+    // Extract all 2-letter sequences anywhere in the text
+    const found = new Set();
+    const matches = text.match(/[A-Za-z]{2}/g) || [];
+    matches.forEach(m => found.add(m.toUpperCase()));
+
+    // Only keep initials that appear on the current graph
+    const graphNames = new Set(getActiveShifts().map(s => s.name.toUpperCase()));
+    for (const ini of found) { if (!graphNames.has(ini)) found.delete(ini); }
+
+    // Update wxInitials: remove those not in new text, add new ones
+    for (const ini of [...wxInitials]) {
+      if (!found.has(ini)) wxInitials.delete(ini);
+    }
+    for (const ini of found) wxInitials.add(ini);
+
+    render();
+  }
 
   // ── Undo / Redo ──
   const undoStack = [];
@@ -1327,7 +1385,7 @@
     const remaining = available - reserved;
     const rowH = Math.max(20, Math.min(80, Math.floor(remaining / n)));
     container.style.setProperty('--row-h', rowH + 'px');
-    const barFontSize = Math.max(12, Math.floor(rowH * 0.75));
+    const barFontSize = Math.max(8, Math.floor(rowH * 0.41));
     container.querySelectorAll('.shift-bar').forEach(b => {
       b.style.fontSize = barFontSize + 'px';
       b.style.fontWeight = '700';
@@ -2492,12 +2550,16 @@
 
         const blueWidth = Math.max(0, 100 - blueLeft - blueRight);
 
+        const wxMark = wxInitials.has(name)
+          ? `<span style="position:absolute;left:4px;top:50%;transform:translateY(-50%);font-size:0.85em;font-weight:900;white-space:nowrap;pointer-events:none;z-index:10;"><span style="color:#22c55e;">✓</span> WX</span>`
+          : '';
+
         const barContent = width > 18
-          ? `${gapBeforeStr ? `<span style="${gapBeforeStyle}margin-right:6px;font-size:0.9em;">${gapBeforeStr}</span>` : ''}<span style="font-weight:700;opacity:0.9;margin-right:5px;">${name}</span><span style="opacity:0.85;">${label}</span><span style="opacity:0.65;margin-left:5px;">${durLabel}</span>${gapAfterStr ? `<span style="${gapAfterStyle}margin-left:6px;font-size:0.9em;">${gapAfterStr}</span>` : ''}`
+          ? `${gapBeforeStr ? `<span style="${gapBeforeStyle}margin-right:6px;font-size:0.85em;">${gapBeforeStr}</span>` : ''}<span style="font-weight:900;margin-right:6px;">${name}</span><span style="font-weight:700;">${label}</span><span style="opacity:0.8;margin-left:5px;font-size:0.85em;">${durLabel}</span>${gapAfterStr ? `<span style="${gapAfterStyle}margin-left:6px;font-size:0.85em;">${gapAfterStr}</span>` : ''}`
           : width > 10
-          ? `<span style="font-weight:700;opacity:0.9;margin-right:5px;">${name}</span><span style="opacity:0.85;">${label}</span>`
+          ? `<span style="font-weight:900;margin-right:5px;">${name}</span><span style="font-weight:700;">${label}</span>`
           : width > 5
-          ? `<span style="font-weight:700;">${name}</span>`
+          ? `<span style="font-weight:900;">${name}</span>`
           : '';
 
         const hasNarrowLV = partialLeaves.some(lv => {
@@ -2517,6 +2579,7 @@
           ${tosOverlays}
           ${yellowInner}
           ${lvOverlays}
+          ${wxMark}
           <span class="bar-label" style="
             position:absolute;
             left:${blueLeft}%;
