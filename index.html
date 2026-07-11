@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>Shift Graph</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <style>
@@ -940,6 +941,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
+  const BUILD_ID = 'count-2026-07-11h';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -950,6 +952,7 @@
   const rowOrderByDate = {};
   const previewReqIds = new Set(); // requests currently being previewed
   const wxInitials = new Set();    // initials marked with WX checkmark
+  const importRawByDate = {};      // last pasted WMT text per date (for rebuild/debug)
 
   // ── WX Mark ──
   async function pasteWX() {
@@ -1321,16 +1324,13 @@
         if (!info) continue;
 
         let targetDate = dates[d];
-        if (info.start >= 20 || info.start < 4) {
+        const isOvernight = info.start >= 20 || info.start < 4;
+        if (isOvernight) {
           const prev = new Date(dates[d] + 'T12:00:00');
           prev.setDate(prev.getDate() - 1);
-          targetDate = prev.toISOString().slice(0, 10);
-          // Offset early-morning shifts by +24 so they render on prev day's extended timeline
-          if (info.start < 4) {
-            info.start += 24;
-            info.end += 24;
-          }
+          targetDate = localDateStr(prev);
         }
+        const prepared = prepareImportedShift(withOpsTimes({ start: info.start, end: info.end }, info.start, info.end));
 
         if (!schedulesByDate[targetDate]) schedulesByDate[targetDate] = [];
 
@@ -1339,8 +1339,10 @@
           schedulesByDate[targetDate].push({
             id: Date.now() + Math.random(),
             name: initials,
-            start: info.start,
-            end: info.end,
+            opsStart: info.start,
+            opsEnd: info.end,
+            start: prepared.start,
+            end: prepared.end,
             cic: isCICShift,
             dev: isDevShift,
             role: 'Pay Period Import'
@@ -1702,7 +1704,17 @@
           if (nextTokens.every(isInitials)) { initials = nextTokens; i++; }
         }
         initials.forEach(tok => {
-          parsed.push({ id: Date.now() + Math.random(), name: cleanInitials(tok), start: shiftInfo.start, end: shiftInfo.end, role: 'Imported', cic: isCIC(tok), dev: isDev(tok) });
+          parsed.push({
+            id: Date.now() + Math.random(),
+            name: cleanInitials(tok),
+            opsStart: shiftInfo.start,
+            opsEnd: shiftInfo.end,
+            start: shiftInfo.start,
+            end: shiftInfo.end,
+            role: 'Imported',
+            cic: isCIC(tok),
+            dev: isDev(tok)
+          });
         });
       }
       i++;
@@ -1719,22 +1731,26 @@
     prevDateObj.setDate(prevDateObj.getDate() - 1);
     const prevDate = localDateStr(prevDateObj);
 
-    const currentDayShifts = parsed.filter(s => s.start >= 4 && s.start < 20);
-    const prevDayShifts    = parsed.filter(s => s.start >= 20 || s.start < 4).map(s =>
-      s.start < 4 ? { ...s, start: s.start + 24, end: s.end + 24 } : s
-    );
+    const currentDayShifts = parsed
+      .filter(s => isDayOpsShift(s))
+      .map(s => prepareImportedShift(s));
+    const prevDayShifts = parsed
+      .filter(s => isOvernightOpsShift(s))
+      .map(s => prepareImportedShift(s));
 
-    // Keep any existing overnight shifts on this date (start >= 20), replace day shifts
-    const existingNightShifts = (schedulesByDate[targetDate] || []).filter(s => s.start >= 20);
+    // Keep any existing overnight shifts on this date, replace day shifts
+    const existingNightShifts = (schedulesByDate[targetDate] || []).filter(s => isOvernightOpsShift(s));
     if (currentDayShifts.length > 0) schedulesByDate[targetDate] = [...existingNightShifts, ...currentDayShifts];
     if (prevDayShifts.length > 0) {
       if (!schedulesByDate[prevDate]) schedulesByDate[prevDate] = [];
-      schedulesByDate[prevDate] = [
-        ...schedulesByDate[prevDate].filter(s => s.start < 20),
-        ...prevDayShifts
-      ];
+      const dayOnly = schedulesByDate[prevDate].filter(s => isDayOpsShift(s));
+      // Replace overnight rows on the previous day; dedupe by name so re-imports stay clean
+      const overnightByName = new Map();
+      prevDayShifts.forEach(s => overnightByName.set(s.name, s));
+      schedulesByDate[prevDate] = [...dayOnly, ...overnightByName.values()];
     }
 
+    importRawByDate[targetDate] = raw;
     document.getElementById('dateFilter').value = targetDate;
     VIEW_START = 4; VIEW_END = 26;
 
@@ -1743,9 +1759,11 @@
     if (parsedReqs.length > 0) {
       requestsByDate[targetDate] = parsedReqs;
     }
+    sanitizeRequests();
 
     render();
     renderRequests();
+    logStaffCountAudit(targetDate);
 
     showPasteFeedback(btn, '', false); // silent on success
   }
@@ -1761,12 +1779,19 @@
     'MIL':'Military Leave','SL':'Sick Leave','TOA':'Time Off Award',
     'Time Off Award':'Time Off Award',
     'WX':'Hazardous Weather Leave','X':'Regular Day Off',
-    'Shift Chg':'Shift Change','Shift Swap':'Shift Swap','Sick':'Sick Leave',
+    'Sick':'Sick Leave',
     'Annual':'Annual Leave','XTU':'Credit Time Used'
+  };
+  // Display labels only — not used for leave/count logic
+  const REQUEST_TYPE_LABELS = {
+    ...LEAVE_TYPES,
+    'Shift Chg': 'Shift Change',
+    'Shift Swap': 'Shift Swap'
   };
   const LEAVE_CODES = new Set(Object.keys(LEAVE_TYPES));
 
   function isLeaveType(type) {
+    if (isShiftChangeType(type)) return false;
     return LEAVE_CODES.has(type) || /^(Annual|Sick|Admin|TRNG|AWOL|BL|Blood|CL|COS|CTU|XTU|FL|FRLO|FSL|HL|JURY|LWOP|MIL|SL|TOA|Time Off Award|WX|X)$/i.test(type);
   }
 
@@ -1810,8 +1835,29 @@
       const isDenied   = statusClean === 'denied';
       const isPending  = !isApproved && !isDenied;
 
-      const leaveType = isLeaveType(type);
       const shiftChange = isShiftChangeType(type);
+
+      // Shift changes: schedule lines are source of truth. Approved ones are
+      // already reflected in the shift table — never count as leave or partial leave.
+      // Only denied shift changes appear in the requests panel.
+      if (shiftChange) {
+        if (isDenied) {
+          requests.push({
+            id: Date.now() + Math.random(),
+            cpc, type, from, to, withCol,
+            status: 'denied',
+            isLeave: false,
+            isPartial: false,
+            isShiftChange: true,
+            resolvedAction: null,
+            _expanded: false,
+            date: targetDate
+          });
+        }
+        continue;
+      }
+
+      const leaveType = isLeaveType(type);
       const wholeShift = from.toLowerCase() === 'shift' || from === '';
 
       // Partial leave (approved) → shade on bar, not in requests list
@@ -1835,9 +1881,6 @@
       // Whole shift approved leave → ignore
       if (leaveType && wholeShift && isApproved) continue;
 
-      // Approved shift changes → ignore
-      if (shiftChange && isApproved) continue;
-
       // Everything denied or pending → add to list
       if (isDenied || isPending) {
         requests.push({
@@ -1853,6 +1896,35 @@
       }
     }
     return requests;
+  }
+
+  function sanitizeRequests() {
+    Object.keys(requestsByDate).forEach(date => {
+      requestsByDate[date] = (requestsByDate[date] || [])
+        .filter(r => {
+          // Remove legacy rows where approved shift chg was stored as partial leave
+          if (isShiftChangeType(r.type) && (r.status === 'approved-partial' || r.resolvedAction === 'approve')) {
+            return false;
+          }
+          return true;
+        })
+        .map(r => {
+          if (isShiftChangeType(r.type)) {
+            return { ...r, isLeave: false, isPartial: false, isShiftChange: true };
+          }
+          return r;
+        });
+    });
+  }
+
+  function getPartialLeaveRequests(reqs, onLeave) {
+    return reqs.filter(r =>
+      !isShiftChangeType(r.type) &&
+      r.isLeave && r.isPartial &&
+      r.lvStart != null && r.lvEnd != null &&
+      (r.resolvedAction === 'approve' || r.status === 'approved-partial') &&
+      !onLeave.has(r.cpc)
+    );
   }
 
   function renderRequests() {
@@ -1881,7 +1953,7 @@
     }
 
     body.innerHTML = reqs.map(req => {
-      const typeName = LEAVE_TYPES[req.type] || req.type;
+      const typeName = REQUEST_TYPE_LABELS[req.type] || req.type;
       const fromTo = req.from && req.to ? `${req.from} → ${req.to}` : req.from || '';
       const withStr = req.withCol ? ` · with ${req.withCol}` : '';
       const statusClass = req.resolvedAction ? `status-resolved-${req.resolvedAction}` : `status-${req.status}`;
@@ -1976,14 +2048,15 @@
     if (action === 'approve' && isShiftChangeType(req.type)) {
       const shifts = schedulesByDate[date] || [];
       const shift = shifts.find(s => s.name === req.cpc);
-      if (shift && req.to) {
+        if (shift && req.to) {
         const info = parseShiftCode(req.to.replace(/\s/g,''));
         if (info) {
           // Save original so we can undo
           req._origStart = shift.start;
           req._origEnd   = shift.end;
-          shift.start = info.start;
-          shift.end   = info.end;
+          req._origOpsStart = shift.opsStart;
+          req._origOpsEnd = shift.opsEnd;
+          Object.assign(shift, prepareImportedShift(withOpsTimes(shift, info.start, info.end)));
         }
       }
     }
@@ -2006,9 +2079,16 @@
       if (shift) {
         shift.start = req._origStart;
         shift.end   = req._origEnd;
+        if (req._origOpsStart != null) {
+          shift.opsStart = req._origOpsStart;
+          shift.opsEnd   = req._origOpsEnd;
+        }
+        Object.assign(shift, repairShiftTimes(shift));
       }
       delete req._origStart;
       delete req._origEnd;
+      delete req._origOpsStart;
+      delete req._origOpsEnd;
     }
 
     req.resolvedAction = null;
@@ -2068,6 +2148,202 @@
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
   }
 
+  // ── Timeline helpers (single source of truth for bars + hourly counts) ──
+  // Ops day runs 4am → 2am next calendar day. Hour slots are [h, h+1) for h = 4..25.
+
+  function toTimeline(start, end) {
+    let s = start, e = end;
+    if (s >= 24) {
+      if (e <= s) e += 24;
+      else if (e < 24) e += 24;
+      return { start: s, end: e };
+    }
+    if (e <= s) e += 24;
+    else if (s >= 20 && e < 20) e += 24;
+    else if (s < 4) {
+      s += 24;
+      if (e < 24) e += 24;
+    }
+    return { start: s, end: e };
+  }
+
+  function activeTOSList(shift) {
+    return (shift.tosList || []).filter(t =>
+      !t.removed && t.tosStart != null && t.tosEnd != null
+    );
+  }
+
+  // Full bar span on the timeline (core shift + any TOS extension)
+  function shiftBarSpan(shift) {
+    const core = toTimeline(opsStartOf(shift), opsEndOf(shift));
+    let start = core.start, end = core.end;
+    activeTOSList(shift).forEach(t => {
+      const span = toTimeline(t.tosStart, t.tosEnd);
+      start = Math.min(start, span.start);
+      end = Math.max(end, span.end);
+    });
+    return { start, end };
+  }
+
+  function visibleSpan(span) {
+    const start = Math.max(span.start, VIEW_START);
+    const end = Math.min(span.end, VIEW_END);
+    if (end <= start) return null;
+    return { start, end };
+  }
+
+  function slotOverlap(span, hour) {
+    if (!span) return 0;
+    return Math.min(span.end, hour + 1) - Math.max(span.start, hour);
+  }
+
+  // WMT calendar start (opsStart) is stable for day vs overnight routing.
+  // Timeline start/end can extend past midnight for display + overlap math.
+  function opsStartOf(shift) {
+    return shift.opsStart != null ? shift.opsStart : shift.start;
+  }
+
+  function opsEndOf(shift) {
+    return shift.opsEnd != null ? shift.opsEnd : shift.end;
+  }
+
+  function isDayOpsShift(shift) {
+    const os = opsStartOf(shift);
+    return os >= 4 && os < 20;
+  }
+
+  function isOvernightOpsShift(shift) {
+    const os = opsStartOf(shift);
+    return os >= 20 || os < 4;
+  }
+
+  function withOpsTimes(shift, start, end) {
+    return { ...shift, opsStart: start, opsEnd: end, start, end };
+  }
+
+  function prepareImportedShift(s) {
+    const opsStart = opsStartOf(s);
+    const opsEnd = opsEndOf(s);
+    const { start, end } = toTimeline(opsStart, opsEnd);
+    return { ...s, opsStart, opsEnd, start, end };
+  }
+
+  function repairShiftTimes(s) {
+    const opsStart = opsStartOf(s);
+    const opsEnd = opsEndOf(s);
+    const { start, end } = toTimeline(opsStart, opsEnd);
+    if (start === s.start && end === s.end && s.opsStart != null) return s;
+    return { ...s, opsStart, opsEnd, start, end };
+  }
+
+  function normalizeAllSchedules() {
+    Object.keys(schedulesByDate).forEach(date => {
+      schedulesByDate[date] = schedulesByDate[date].map(repairShiftTimes);
+    });
+  }
+
+  // Hourly staffing count for one ops day
+  // 0500–1959: everyone except trainees, CIC, and last hour of shift
+  // 2000–0200: everyone except trainees
+  function isTraineeExcluded(shift) {
+    return shift.dev && !shift.countForStaffing;
+  }
+
+  function shiftCountsInHour(shift, hour) {
+    const vis = visibleSpan(shiftBarSpan(shift));
+    return slotOverlap(vis, hour) >= 0.5;
+  }
+
+  function inLastHourOfShift(shift, hour) {
+    const { end } = toTimeline(opsStartOf(shift), opsEndOf(shift));
+    return end > hour && end <= hour + 1;
+  }
+
+  function hourlyStaffCounts(shifts, partialLeaves, onLeave) {
+    const DAY_SLOT_START = 5;   // 0500
+    const DAY_SLOT_END = 20;    // slots 5–19 → 0500 through 1959
+    const EVE_SLOT_START = 20;  // 2000
+    const EVE_SLOT_END = 26;    // slots 20–25 → 2000 through 0200
+
+    const results = [];
+    for (let h = VIEW_START; h < VIEW_END; h++) {
+      const isDayStaffing = h >= DAY_SLOT_START && h < DAY_SLOT_END;
+      const isEveningStaffing = h >= EVE_SLOT_START && h < EVE_SLOT_END;
+      const working = new Set();
+      const names = [];
+
+      shifts.forEach(s => {
+        if (onLeave.has(s.name)) return;
+        if (!shiftCountsInHour(s, h)) return;
+        if (isDayStaffing) {
+          if (s.cic || isTraineeExcluded(s)) return;
+          if (inLastHourOfShift(s, h)) return;
+        } else if (isEveningStaffing) {
+          if (isTraineeExcluded(s)) return;
+        }
+        if (!working.has(s.name)) names.push(s.name);
+        working.add(s.name);
+      });
+
+      let count = working.size;
+      const leaveOff = [];
+      partialLeaves.forEach(lv => {
+        if (!working.has(lv.cpc)) return;
+        const lvVis = visibleSpan(toTimeline(lv.lvStart, lv.lvEnd));
+        if (slotOverlap(lvVis, h) >= 0.5) {
+          count--;
+          leaveOff.push(lv.cpc);
+        }
+      });
+      results.push({ h, count: Math.max(0, count), names: names.sort(), leaveOff });
+    }
+    return results;
+  }
+
+  function formatHourSlot(h) {
+    const start = axisHourLabel(h);
+    const end = axisHourLabel(h + 1);
+    return `${start}–${end}`;
+  }
+
+  function buildStaffCountContext(date) {
+    const shifts = schedulesByDate[date] || [];
+    const allReqs = requestsByDate[date] || [];
+    const onLeave = new Set(
+      allReqs.filter(r => !isShiftChangeType(r.type) && r.isLeave && !r.isPartial && r.resolvedAction === 'approve').map(r => r.cpc)
+    );
+    const partialLeaves = getPartialLeaveRequests(allReqs, onLeave);
+    return { shifts, onLeave, partialLeaves, hourCounts: hourlyStaffCounts(shifts, partialLeaves, onLeave) };
+  }
+
+  function logStaffCountAudit(date) {
+    const { hourCounts } = buildStaffCountContext(date);
+    const watch = [7, 8, 9, 10, 11, 12, 22, 23, 24, 25];
+    console.group(`Shift Graph staff audit · ${date} · ${BUILD_ID}`);
+    watch.forEach(h => {
+      const row = hourCounts.find(r => r.h === h);
+      if (!row) return;
+      const leave = row.leaveOff.length ? ` −leave ${row.leaveOff.join(',')}` : '';
+      console.log(`${formatHourSlot(h)}: ${row.count} [${row.names.join(', ')}]${leave}`);
+    });
+    console.groupEnd();
+  }
+
+  window.dumpStaffCounts = function(date) {
+    const d = date || getActiveDate();
+    const { shifts, onLeave, partialLeaves, hourCounts } = buildStaffCountContext(d);
+    console.log('build', BUILD_ID);
+    console.log('date', d);
+    console.log('shifts', shifts.length, shifts.map(s => `${s.name} ops${formatTime(opsStartOf(s))}-${formatTime(opsEndOf(s))} tl${formatTime(s.start)}-${formatTime(s.end)}${s.dev ? ' DEV' : ''}${s.cic ? ' CIC' : ''}`));
+    console.log('onLeave', [...onLeave]);
+    console.log('partialLeaves', partialLeaves.map(lv => `${lv.cpc} ${formatTime(lv.lvStart)}-${formatTime(lv.lvEnd)}`));
+    hourCounts.forEach(({ h, count, names, leaveOff }) => {
+      const leave = leaveOff.length ? ` −${leaveOff.join(',')}` : '';
+      console.log(`${formatHourSlot(h)}: ${count} [${names.join(', ')}]${leave}`);
+    });
+    return hourCounts;
+  };
+
   // ── Add shift ──
   function addShift() {
     const name = document.getElementById('empName').value.trim();
@@ -2079,7 +2355,7 @@
     if (e <= s) { alert('End time must be after start time.'); return; }
     const dateVal = getActiveDate();
     if (!schedulesByDate[dateVal]) schedulesByDate[dateVal] = [];
-    schedulesByDate[dateVal].push({ id: Date.now(), name, start: s, end: e });
+    schedulesByDate[dateVal].push(prepareImportedShift(withOpsTimes({ id: Date.now(), name }, s, e)));
     render();
     renderRequests();
     document.getElementById('empName').value = '';
@@ -2099,6 +2375,7 @@
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
     Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
     Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
+    Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
     localStorage.removeItem(STORAGE_KEY);
     render();
     renderRequests();
@@ -2215,97 +2492,36 @@
     }
     html += `</div></div>`;
 
-    // Build effective shifts for the hourly count — accounting for resolved requests
     const date = getActiveDate();
     const allReqs = requestsByDate[date] || [];
-
-    // Each shift counts only for the day it starts on — no pulling from previous day
-    const allShifts = [...shiftsForDate];
-
-    // Apply approved/previewed shift changes and collect whole-shift leave names
     const previewReqs = Array.from(previewReqIds)
       .map(pid => allReqs.find(r => String(r.id) === pid))
       .filter(Boolean);
 
+    // ── Hourly staffing counts ──
     const onLeave = new Set([
-      ...allReqs.filter(r => r.isLeave && !r.isPartial && r.resolvedAction === 'approve').map(r => r.cpc),
-      ...previewReqs.filter(r => r.isLeave && !r.isPartial).map(r => r.cpc),
+      ...allReqs.filter(r => !isShiftChangeType(r.type) && r.isLeave && !r.isPartial && r.resolvedAction === 'approve').map(r => r.cpc),
+      ...previewReqs.filter(r => !isShiftChangeType(r.type) && r.isLeave && !r.isPartial).map(r => r.cpc),
     ]);
+    const partialLeaves = getPartialLeaveRequests(allReqs, onLeave);
+    const hourCounts = hourlyStaffCounts(displayShifts, partialLeaves, onLeave);
 
-    const effectiveShifts = allShifts.map(s => {
-      const pr = previewReqs.find(r => isShiftChangeType(r.type) && r.cpc === s.name && r.to);
-      if (pr) { const i = parseShiftCode(pr.to.replace(/\s/g,'')); if (i) return {...s, start:i.start, end:i.end}; }
-      const ap = allReqs.find(r => r.cpc === s.name && isShiftChangeType(r.type) && r.resolvedAction === 'approve' && r.to);
-      if (ap) { const i = parseShiftCode(ap.to.replace(/\s/g,'')); if (i) return {...s, start:i.start, end:i.end}; }
-      return s;
-    });
-
-    // Countable = not CIC, not dev (unless countForStaffing checked), not on whole-shift leave
-    const countable = effectiveShifts.filter(s =>
-      !s.cic && !(s.dev && !s.countForStaffing) && !onLeave.has(s.name)
-    );
-
-    // Approved partial leaves — exclude anyone already on whole-shift leave
-    const partialLeaves = allReqs.filter(r =>
-      r.isLeave && r.isPartial &&
-      r.lvStart != null && r.lvEnd != null &&
-      (r.resolvedAction === 'approve' || r.status === 'approved-partial') &&
-      !onLeave.has(r.cpc) // don't double-subtract whole-shift leave people
-    );
-
-    function activeTOSIntervals(shift) {
-      return (shift.tosList || []).filter(t =>
-        !t.removed && t.tosStart != null && t.tosEnd != null
-      );
-    }
-
-    // Count shift core time (with last-hour rule before 1900)
-    function shiftCountsHour(shift, h, isEve) {
-      const overlap = Math.min(shift.end, h + 1) - Math.max(shift.start, h);
-      if (overlap < 0.5) return false;
-      if (!isEve && shift.end > h && shift.end <= h + 1) return false;
-      return true;
-    }
-
-    // Count any active TOS interval (extensions before/after shift, etc.)
-    function tosCountsHour(shift, h) {
-      return activeTOSIntervals(shift).some(tos => {
-        const overlap = Math.min(tos.tosEnd, h + 1) - Math.max(tos.tosStart, h);
-        return overlap >= 0.5;
-      });
-    }
-
-    function countsHour(shift, h, isEve) {
-      return shiftCountsHour(shift, h, isEve) || tosCountsHour(shift, h);
-    }
-
-    // ── Hourly count row ──
     const dow = new Date(date + 'T12:00:00').getDay();
     const isWeekday = dow >= 1 && dow <= 5;
     const minStaff = isWeekday ? { 6:4, 7:6, 20:8, 21:5, 22:3 } : {};
 
     html += `<div class="chart-axis" style="height:22px;margin-bottom:4px;">`;
     html += `<div class="chart-axis-spacer"></div><div class="chart-axis-track">`;
-    for (let h = VIEW_START; h < VIEW_END; h++) {
+    hourCounts.forEach(({ h, count, names, leaveOff }) => {
       const h24 = h % 24;
-      const isEve = h >= 19;
-
-      // Count everyone working ≥30 min this hour (shift or TOS)
-      let count = countable.filter(s => countsHour(s, h, isEve)).length;
-
-      // Subtract anyone on partial leave for ≥30 min this hour
-      count -= partialLeaves.filter(lv => {
-        const shift = countable.find(s => s.name === lv.cpc);
-        if (!shift) return false;
-        if (!countsHour(shift, h, isEve)) return false;
-        return Math.min(lv.lvEnd, h + 1) - Math.max(lv.lvStart, h) >= 0.5;
-      }).length;
-      count = Math.max(0, count);
 
       const leftPct  = ((h - VIEW_START) / span) * 100;
       const widthPct = (1 / span) * 100;
 
       const isDayWindow = h >= 7 && h < 20; // 0700–2000 hour slots
+      const slotLabel = formatHourSlot(h);
+      const leaveNote = leaveOff.length ? ` −leave ${leaveOff.join(', ')}` : '';
+      const tip = `${slotLabel}: ${count}\n${names.join(', ')}${leaveNote}`;
 
       let bgColor, textColor;
       if (isDayWindow && count < 6) {
@@ -2317,7 +2533,7 @@
       } else if (minStaff[h24] !== undefined && count < minStaff[h24]) {
         bgColor = 'rgba(217,79,110,0.35)'; textColor = '#9b1a34';
       } else {
-        const intensity = Math.min(0.15 + (count / Math.max(countable.length, 1)) * 0.5, 0.65);
+        const intensity = Math.min(0.15 + (count / Math.max(displayShifts.length, 1)) * 0.5, 0.65);
         bgColor = `rgba(91,155,213,${intensity})`;
         textColor = '#1a4a7a';
       }
@@ -2332,10 +2548,11 @@
         background:${bgColor};
         border-radius:3px;
         display:flex;align-items:center;justify-content:center;
-      ">
+        cursor:help;
+      " title="${tip.replace(/"/g, '&quot;')}">
         ${showCount ? `<span style="font-family:var(--font-mono);font-size:clamp(8px,1vw,11px);font-weight:700;color:${textColor};">${count}</span>` : ''}
       </div>`;
-    }
+    });
     html += `</div></div>`;
     html += `<div class="grid-and-bars"><div class="chart-track">`;
 
@@ -2404,16 +2621,11 @@
       });
 
       empShifts.forEach(shift => {
-        // Collect active TOS entries to expand the bar
-        const activeTOS = (shift.tosList || []).filter(t => !t.removed);
-        const allTOSStart = activeTOS.map(t => t.tosStart).filter(v => v != null);
-        const allTOSEnd   = activeTOS.map(t => t.tosEnd).filter(v => v != null);
-        const barStart = allTOSStart.length ? Math.min(shift.start, ...allTOSStart) : shift.start;
-        const barEnd   = allTOSEnd.length   ? Math.max(shift.end,   ...allTOSEnd)   : shift.end;
-
-        const visStart = Math.max(barStart, VIEW_START);
-        const visEnd = Math.min(barEnd, VIEW_END);
-        if (visEnd <= visStart) return;
+        const bar = shiftBarSpan(shift);
+        const vis = visibleSpan(bar);
+        if (!vis) return;
+        const visStart = vis.start;
+        const visEnd = vis.end;
         const left = ((visStart - VIEW_START) / span) * 100;
         const width = ((visEnd - visStart) / span) * 100;
         const col = getColor(shift);
@@ -2426,30 +2638,25 @@
           return r && r.cpc === name && r.isLeave && !r.isPartial;
         });
         const barBg = wholeLeavePreview ? 'rgba(130,130,145,0.6)' : col.bg;
+        const core = toTimeline(shift.start, shift.end);
 
         // Green TOS overlays — only the TOS portions outside the original shift
         let tosOverlays = '';
-        activeTOS.forEach(tos => {
-          if (tos.tosStart == null || tos.tosEnd == null) return;
-          // TOS portion before shift start
-          if (tos.tosStart < shift.start) {
-            const tVisStart = Math.max(tos.tosStart, VIEW_START);
-            const tVisEnd   = Math.min(shift.start, VIEW_END);
-            if (tVisEnd > tVisStart) {
-              const tLeft  = ((tVisStart - visStart) / (visEnd - visStart)) * 100;
-              const tWidth = ((tVisEnd - tVisStart)  / (visEnd - visStart)) * 100;
-              tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:5px 0 0 5px;pointer-events:none;z-index:1;"></div>`;
-            }
+        activeTOSList(shift).forEach(tos => {
+          const tSpan = toTimeline(tos.tosStart, tos.tosEnd);
+          if (tSpan.start < core.start) {
+            const tVis = visibleSpan({ start: tSpan.start, end: core.start });
+            if (!tVis) return;
+            const tLeft  = ((tVis.start - visStart) / (visEnd - visStart)) * 100;
+            const tWidth = ((tVis.end - tVis.start) / (visEnd - visStart)) * 100;
+            tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:5px 0 0 5px;pointer-events:none;z-index:1;"></div>`;
           }
-          // TOS portion after shift end
-          if (tos.tosEnd > shift.end) {
-            const tVisStart = Math.max(shift.end, VIEW_START);
-            const tVisEnd   = Math.min(tos.tosEnd, VIEW_END);
-            if (tVisEnd > tVisStart) {
-              const tLeft  = ((tVisStart - visStart) / (visEnd - visStart)) * 100;
-              const tWidth = ((tVisEnd - tVisStart)  / (visEnd - visStart)) * 100;
-              tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:0 5px 5px 0;pointer-events:none;z-index:1;"></div>`;
-            }
+          if (tSpan.end > core.end) {
+            const tVis = visibleSpan({ start: core.end, end: tSpan.end });
+            if (!tVis) return;
+            const tLeft  = ((tVis.start - visStart) / (visEnd - visStart)) * 100;
+            const tWidth = ((tVis.end - tVis.start) / (visEnd - visStart)) * 100;
+            tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:0 5px 5px 0;pointer-events:none;z-index:1;"></div>`;
           }
         });
 
@@ -2478,7 +2685,7 @@
 
         // Grey LV overlay — approved-partial from import, manually approved partial leave, or previewed
         const partialLeaves = (requestsByDate[date] || []).filter(r => {
-          if (!r.isPartial || r.cpc !== name) return false;
+          if (isShiftChangeType(r.type) || !r.isPartial || r.cpc !== name) return false;
           const isApproved = r.status === 'approved-partial' || (r.resolvedAction === 'approve' && r.isPartial);
           const isPreviewed = previewReqIds.has(String(r.id));
           if (!isApproved && !isPreviewed) return false;
@@ -2628,6 +2835,7 @@
   }
 
   function render() {
+    normalizeAllSchedules();
     const container = document.getElementById('timelineContainer');
     const empty = document.getElementById('emptyState');
     const activeDate = getActiveDate();
@@ -2675,7 +2883,7 @@
 
     const dateLabel = formatDateLabel(activeDate);
     document.getElementById('chartSubtitle').innerHTML =
-      `${dateLabel} &nbsp;·&nbsp; <span>Day: <strong style="color:${dayColor};">${dayCount}</strong></span> &nbsp;·&nbsp; <span>Eve: <strong style="color:${eveColor};">${eveCount}</strong></span>`;
+      `${dateLabel} &nbsp;·&nbsp; <span>Day: <strong style="color:${dayColor};">${dayCount}</strong></span> &nbsp;·&nbsp; <span>Eve: <strong style="color:${eveColor};">${eveCount}</strong></span> &nbsp;·&nbsp; <span style="color:var(--text-muted);font-size:11px;">${BUILD_ID}</span>`;
 
     let html = `<div class="date-section">`;
     html += renderTimeline(shifts);
@@ -2765,6 +2973,10 @@
 
     shift.start = newStart;
     shift.end   = newEnd;
+    shift.opsStart = newStart;
+    shift.opsEnd   = newEnd;
+    const repaired = repairShiftTimes(shift);
+    Object.assign(shift, repaired);
 
     render();
     _renderShiftModal();
@@ -3033,7 +3245,8 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         schedulesByDate,
         requestsByDate,
-        rowOrderByDate
+        rowOrderByDate,
+        importRawByDate
       }));
     } catch(e) { console.warn('Save failed:', e); }
   }
@@ -3043,9 +3256,16 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const data = JSON.parse(raw);
-      if (data.schedulesByDate) Object.assign(schedulesByDate, data.schedulesByDate);
+      if (data.schedulesByDate) {
+        Object.entries(data.schedulesByDate).forEach(([date, shifts]) => {
+          schedulesByDate[date] = shifts.map(repairShiftTimes);
+        });
+      }
+      normalizeAllSchedules();
       if (data.requestsByDate)  Object.assign(requestsByDate,  data.requestsByDate);
+      sanitizeRequests();
       if (data.rowOrderByDate)  Object.assign(rowOrderByDate,  data.rowOrderByDate);
+      if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
     } catch(e) { console.warn('Load failed:', e); }
   }
 
@@ -3076,6 +3296,7 @@
   window.importPayPeriodHTML = importPayPeriodHTML;
   (function init() {
     loadData();
+    console.info('Shift Graph build:', BUILD_ID);
     updateUndoRedoBtns();
 
     const today = localDateStr();
