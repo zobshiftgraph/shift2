@@ -941,7 +941,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-07-11h';
+  const BUILD_ID = 'count-2026-07-11i';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1754,11 +1754,12 @@
     document.getElementById('dateFilter').value = targetDate;
     VIEW_START = 4; VIEW_END = 26;
 
-    // Parse requests
-    const parsedReqs = parseRequests(raw, targetDate);
+    // Parse requests + apply approved TOS to shift bars
+    const { requests: parsedReqs, tosToApply } = parseRequests(raw, targetDate);
     if (parsedReqs.length > 0) {
       requestsByDate[targetDate] = parsedReqs;
     }
+    tosToApply.forEach(t => applyTosToShift(targetDate, t.cpc, t.from, t.to, t.type));
     sanitizeRequests();
 
     render();
@@ -1786,12 +1787,18 @@
   const REQUEST_TYPE_LABELS = {
     ...LEAVE_TYPES,
     'Shift Chg': 'Shift Change',
-    'Shift Swap': 'Shift Swap'
+    'Shift Swap': 'Shift Swap',
+    'XTE': 'Exchange Time Earned (TOS)'
   };
+  const TOS_TYPES = new Set(['XTE']);
   const LEAVE_CODES = new Set(Object.keys(LEAVE_TYPES));
 
+  function isTOSType(type) {
+    return TOS_TYPES.has(type) || /^XTE$/i.test(type);
+  }
+
   function isLeaveType(type) {
-    if (isShiftChangeType(type)) return false;
+    if (isShiftChangeType(type) || isTOSType(type)) return false;
     return LEAVE_CODES.has(type) || /^(Annual|Sick|Admin|TRNG|AWOL|BL|Blood|CL|COS|CTU|XTU|FL|FRLO|FSL|HL|JURY|LWOP|MIL|SL|TOA|Time Off Award|WX|X)$/i.test(type);
   }
 
@@ -1814,13 +1821,45 @@
     return null;
   }
 
+  function applyTosToShift(date, cpc, from, to, type, requestId) {
+    const shifts = schedulesByDate[date] || [];
+    const shift = shifts.find(s => s.name === cpc);
+    if (!shift) return null;
+    const tosStart = parseTimeStr(from);
+    const tosEnd = parseTimeStr(to);
+    if (tosStart == null || tosEnd == null) return null;
+    if (!shift.tosList) shift.tosList = [];
+    const entryId = requestId || (Date.now() + Math.random());
+    const duplicate = shift.tosList.some(t =>
+      !t.removed && Math.abs(t.tosStart - tosStart) < 0.01 && Math.abs(t.tosEnd - tosEnd) < 0.01
+    );
+    if (duplicate) return entryId;
+    shift.tosList.push({
+      id: entryId,
+      from, to,
+      type: type || 'XTE',
+      tosStart, tosEnd,
+      removed: false,
+      fromRequestId: requestId || null
+    });
+    return entryId;
+  }
+
+  function removeTosFromShift(date, cpc, entryId) {
+    const shift = (schedulesByDate[date] || []).find(s => s.name === cpc);
+    if (!shift || !shift.tosList) return;
+    const tos = shift.tosList.find(t => String(t.id) === String(entryId));
+    if (tos) tos.removed = true;
+  }
+
   function parseRequests(raw, targetDate) {
     const reqStart = raw.indexOf('===REQUESTS_START===');
-    if (reqStart === -1) return [];
+    if (reqStart === -1) return { requests: [], tosToApply: [] };
 
     const section = raw.slice(reqStart + '===REQUESTS_START==='.length).trim();
     const lines = section.split('\n').map(l => l.trim()).filter(Boolean);
     const requests = [];
+    const tosToApply = [];
 
     for (const line of lines) {
       const cols = line.split('\t');
@@ -1849,6 +1888,31 @@
             isLeave: false,
             isPartial: false,
             isShiftChange: true,
+            resolvedAction: null,
+            _expanded: false,
+            date: targetDate
+          });
+        }
+        continue;
+      }
+
+      // TOS types (e.g. XTE) — green bar extension, not leave
+      if (isTOSType(type)) {
+        const tosStart = parseTimeStr(from);
+        const tosEnd   = parseTimeStr(to);
+        if (isApproved && tosStart != null && tosEnd != null) {
+          tosToApply.push({ cpc, type, from, to, tosStart, tosEnd });
+          continue;
+        }
+        if ((isDenied || isPending) && tosStart != null && tosEnd != null) {
+          requests.push({
+            id: Date.now() + Math.random(),
+            cpc, type, from, to, withCol,
+            status: isDenied ? 'denied' : 'pending',
+            isTOS: true,
+            isLeave: false,
+            isPartial: false,
+            tosStart, tosEnd,
             resolvedAction: null,
             _expanded: false,
             date: targetDate
@@ -1895,7 +1959,7 @@
         });
       }
     }
-    return requests;
+    return { requests, tosToApply };
   }
 
   function sanitizeRequests() {
@@ -1912,6 +1976,11 @@
           if (isShiftChangeType(r.type)) {
             return { ...r, isLeave: false, isPartial: false, isShiftChange: true };
           }
+          if (isTOSType(r.type)) {
+            const tosStart = r.tosStart != null ? r.tosStart : parseTimeStr(r.from);
+            const tosEnd   = r.tosEnd   != null ? r.tosEnd   : parseTimeStr(r.to);
+            return { ...r, isTOS: true, isLeave: false, isPartial: false, tosStart, tosEnd };
+          }
           return r;
         });
     });
@@ -1920,6 +1989,7 @@
   function getPartialLeaveRequests(reqs, onLeave) {
     return reqs.filter(r =>
       !isShiftChangeType(r.type) &&
+      !isTOSType(r.type) &&
       r.isLeave && r.isPartial &&
       r.lvStart != null && r.lvEnd != null &&
       (r.resolvedAction === 'approve' || r.status === 'approved-partial') &&
@@ -2039,9 +2109,16 @@
     req._expanded = false; // always collapse on resolve
 
     // If approved partial leave: ensure lvStart/lvEnd are set for bar overlay
-    if (action === 'approve' && req.isPartial) {
+    if (action === 'approve' && req.isPartial && !isTOSType(req.type)) {
       if (req.lvStart == null) req.lvStart = parseTimeStr(req.from);
       if (req.lvEnd   == null) req.lvEnd   = parseTimeStr(req.to);
+    }
+
+    // If approved TOS: add green extension to the shift bar
+    if (action === 'approve' && isTOSType(req.type)) {
+      const entryId = applyTosToShift(date, req.cpc, req.from, req.to, req.type, req.id);
+      if (entryId != null) req._tosEntryId = entryId;
+      previewReqIds.delete(String(id));
     }
 
     // If approved shift change: store original times then apply new ones
@@ -2071,6 +2148,12 @@
     const req = reqs.find(r => String(r.id) === String(id));
     if (!req) return;
     snapshot(`Undo ${req.type} – ${req.cpc}`);
+
+    // If it was an approved TOS, remove the added TOS entry
+    if (req.resolvedAction === 'approve' && isTOSType(req.type) && req._tosEntryId != null) {
+      removeTosFromShift(date, req.cpc, req._tosEntryId);
+      delete req._tosEntryId;
+    }
 
     // If it was an approved shift change, restore original shift times
     if (req.resolvedAction === 'approve' && isShiftChangeType(req.type) && req._origStart !== undefined) {
@@ -2173,11 +2256,32 @@
     );
   }
 
+  function previewTOSList(shiftName, date) {
+    return (requestsByDate[date] || [])
+      .filter(r =>
+        previewReqIds.has(String(r.id)) &&
+        (r.isTOS || isTOSType(r.type)) &&
+        r.cpc === shiftName
+      )
+      .map(r => ({
+        tosStart: r.tosStart != null ? r.tosStart : parseTimeStr(r.from),
+        tosEnd: r.tosEnd != null ? r.tosEnd : parseTimeStr(r.to),
+        type: r.type,
+        removed: false,
+        preview: true
+      }))
+      .filter(t => t.tosStart != null && t.tosEnd != null);
+  }
+
+  function allTOSList(shift, date) {
+    return [...activeTOSList(shift), ...previewTOSList(shift.name, date)];
+  }
+
   // Full bar span on the timeline (core shift + any TOS extension)
-  function shiftBarSpan(shift) {
+  function shiftBarSpan(shift, date) {
     const core = toTimeline(opsStartOf(shift), opsEndOf(shift));
     let start = core.start, end = core.end;
-    activeTOSList(shift).forEach(t => {
+    allTOSList(shift, date || getActiveDate()).forEach(t => {
       const span = toTimeline(t.tosStart, t.tosEnd);
       start = Math.min(start, span.start);
       end = Math.max(end, span.end);
@@ -2621,7 +2725,7 @@
       });
 
       empShifts.forEach(shift => {
-        const bar = shiftBarSpan(shift);
+        const bar = shiftBarSpan(shift, date);
         const vis = visibleSpan(bar);
         if (!vis) return;
         const visStart = vis.start;
@@ -2635,28 +2739,30 @@
         // Check if a whole-shift leave is being previewed for this person
         const wholeLeavePreview = Array.from(previewReqIds).some(pid => {
           const r = (requestsByDate[date] || []).find(x => String(x.id) === pid);
-          return r && r.cpc === name && r.isLeave && !r.isPartial;
+          return r && r.cpc === name && r.isLeave && !r.isPartial && !isTOSType(r.type);
         });
         const barBg = wholeLeavePreview ? 'rgba(130,130,145,0.6)' : col.bg;
-        const core = toTimeline(shift.start, shift.end);
+        const core = toTimeline(opsStartOf(shift), opsEndOf(shift));
 
-        // Green TOS overlays — only the TOS portions outside the original shift
+        // Green TOS overlays — portions outside the core shift (stored + previewed)
         let tosOverlays = '';
-        activeTOSList(shift).forEach(tos => {
+        allTOSList(shift, date).forEach(tos => {
           const tSpan = toTimeline(tos.tosStart, tos.tosEnd);
           if (tSpan.start < core.start) {
             const tVis = visibleSpan({ start: tSpan.start, end: core.start });
             if (!tVis) return;
             const tLeft  = ((tVis.start - visStart) / (visEnd - visStart)) * 100;
             const tWidth = ((tVis.end - tVis.start) / (visEnd - visStart)) * 100;
-            tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:5px 0 0 5px;pointer-events:none;z-index:1;"></div>`;
+            const previewStyle = tos.preview ? 'opacity:0.75;border:1px dashed rgba(255,255,255,0.8);' : '';
+            tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:5px 0 0 5px;pointer-events:none;z-index:1;${previewStyle}"></div>`;
           }
           if (tSpan.end > core.end) {
             const tVis = visibleSpan({ start: core.end, end: tSpan.end });
             if (!tVis) return;
             const tLeft  = ((tVis.start - visStart) / (visEnd - visStart)) * 100;
             const tWidth = ((tVis.end - tVis.start) / (visEnd - visStart)) * 100;
-            tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:0 5px 5px 0;pointer-events:none;z-index:1;"></div>`;
+            const previewStyle = tos.preview ? 'opacity:0.75;border:1px dashed rgba(255,255,255,0.8);' : '';
+            tosOverlays += `<div style="position:absolute;left:${tLeft}%;width:${tWidth}%;top:0;bottom:0;background:#22a06b;border-radius:0 5px 5px 0;pointer-events:none;z-index:1;${previewStyle}"></div>`;
           }
         });
 
@@ -2685,7 +2791,7 @@
 
         // Grey LV overlay — approved-partial from import, manually approved partial leave, or previewed
         const partialLeaves = (requestsByDate[date] || []).filter(r => {
-          if (isShiftChangeType(r.type) || !r.isPartial || r.cpc !== name) return false;
+          if (isShiftChangeType(r.type) || isTOSType(r.type) || !r.isPartial || r.cpc !== name) return false;
           const isApproved = r.status === 'approved-partial' || (r.resolvedAction === 'approve' && r.isPartial);
           const isPreviewed = previewReqIds.has(String(r.id));
           if (!isApproved && !isPreviewed) return false;
@@ -3083,7 +3189,7 @@
     const tosItems = shift.tosList || [];
     const tosList = document.getElementById('modalTOSList');
     tosList.innerHTML = tosItems.map(tos => {
-      const label = `TOS ${formatTime(tos.tosStart ?? 0)}–${formatTime(tos.tosEnd ?? 0)}`;
+      const label = `TOS${tos.type ? ' ' + tos.type : ''} ${formatTime(tos.tosStart ?? 0)}–${formatTime(tos.tosEnd ?? 0)}`;
       return `<div class="modal-item${tos.removed ? ' removed' : ''}">
         <span class="modal-item-label">${label}</span>
         ${tos.removed
