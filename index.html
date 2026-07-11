@@ -252,6 +252,27 @@
       padding-left: var(--label-w);
     }
 
+    /* Axis rows share the same left offset + % width as bar-track grid lines */
+    .chart-axis {
+      display: flex;
+      align-items: stretch;
+    }
+
+    .chart-axis-spacer {
+      width: var(--label-w);
+      flex-shrink: 0;
+    }
+
+    .chart-axis-track {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .chart-track {
+      position: relative;
+    }
+
     .grid-lines {
       position: absolute;
       top: 0; left: var(--label-w); right: 0; bottom: 0;
@@ -828,6 +849,7 @@
   </div>
   <div class="header-controls">
     <div style="flex-direction:row;align-items:center;gap:6px;display:flex;">
+      <button class="btn btn-ghost" onclick="goToToday()">Today</button>
       <button class="btn btn-ghost" style="padding:6px 10px;font-size:14px;" onclick="changeDate(-1)">‹</button>
       <input type="date" id="dateFilter" />
       <button class="btn btn-ghost" style="padding:6px 10px;font-size:14px;" onclick="changeDate(1)">›</button>
@@ -1026,7 +1048,14 @@
     const current = picker.value || localDateStr();
     const d = new Date(current + 'T12:00:00');
     d.setDate(d.getDate() + offset);
-    picker.value = d.toISOString().slice(0, 10);
+    picker.value = localDateStr(d);
+    render();
+    renderRequests();
+  }
+
+  function goToToday() {
+    const picker = document.getElementById('dateFilter');
+    if (picker) picker.value = localDateStr();
     render();
     renderRequests();
   }
@@ -1730,6 +1759,7 @@
     'FL':'Funeral Leave','FRLO':'Furlough','FSL':'Family Sick Leave',
     'HL':'Holiday Leave','JURY':'Jury Duty','LWOP':'Leave Without Pay',
     'MIL':'Military Leave','SL':'Sick Leave','TOA':'Time Off Award',
+    'Time Off Award':'Time Off Award',
     'WX':'Hazardous Weather Leave','X':'Regular Day Off',
     'Shift Chg':'Shift Change','Shift Swap':'Shift Swap','Sick':'Sick Leave',
     'Annual':'Annual Leave','XTU':'Credit Time Used'
@@ -1737,7 +1767,7 @@
   const LEAVE_CODES = new Set(Object.keys(LEAVE_TYPES));
 
   function isLeaveType(type) {
-    return LEAVE_CODES.has(type) || /^(Annual|Sick|Admin|TRNG|AWOL|BL|Blood|CL|COS|CTU|XTU|FL|FRLO|FSL|HL|JURY|LWOP|MIL|SL|TOA|WX|X)$/i.test(type);
+    return LEAVE_CODES.has(type) || /^(Annual|Sick|Admin|TRNG|AWOL|BL|Blood|CL|COS|CTU|XTU|FL|FRLO|FSL|HL|JURY|LWOP|MIL|SL|TOA|Time Off Award|WX|X)$/i.test(type);
   }
 
   function isShiftChangeType(type) {
@@ -2102,6 +2132,12 @@
     return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   }
 
+  // Label for hour slot [h, h+1) on the extended timeline (4..26)
+  function axisHourLabel(h) {
+    const clock = h >= 24 ? h - 24 : h;
+    return String(clock).padStart(2, '0') + '00';
+  }
+
   function renderTimeline(shiftsForDate) {
     const span = VIEW_END - VIEW_START;
     const hours = [];
@@ -2148,21 +2184,22 @@
     let html = `<div class="timeline-container">`;
 
     // ── Time label row ──
-    html += `<div style="position:relative;height:22px;margin-bottom:2px;">`;
-    hours.forEach(h => {
+    html += `<div class="chart-axis" style="height:22px;margin-bottom:2px;">`;
+    html += `<div class="chart-axis-spacer"></div><div class="chart-axis-track">`;
+    // Labels aligned on vertical grid lines (same positions as bar-track hour lines)
+    for (let h = VIEW_START + 1; h <= VIEW_END; h++) {
       const pct = ((h - VIEW_START) / span) * 100;
-      const h24 = h % 24;
-      const label = `${String(h24).padStart(2,'0')}00`;
+      const label = axisHourLabel(h);
       const isNextDay = h >= 24;
-      html += `<span class="time-label" style="left:calc(var(--label-w) + ${pct}% * (100% - var(--label-w)) / 100%);${isNextDay ? 'color:var(--accent3);' : ''}">${label}</span>`;
-    });
+      html += `<span class="time-label" style="left:${pct}%;${isNextDay ? 'color:var(--accent3);' : ''}">${label}</span>`;
+    }
     // Current time indicator on axis
     if (nowPct >= 0) {
       const now = new Date();
       const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
       html += `<div style="
         position:absolute;
-        left:calc(var(--label-w) + ${nowPct}% * (100% - var(--label-w)) / 100%);
+        left:${nowPct}%;
         top:0;bottom:0;
         display:flex;align-items:center;
         transform:translateX(-50%);
@@ -2176,7 +2213,7 @@
         ">${timeStr}</span>
       </div>`;
     }
-    html += `</div>`;
+    html += `</div></div>`;
 
     // Build effective shifts for the hourly count — accounting for resolved requests
     const date = getActiveDate();
@@ -2216,35 +2253,51 @@
       !onLeave.has(r.cpc) // don't double-subtract whole-shift leave people
     );
 
+    function activeTOSIntervals(shift) {
+      return (shift.tosList || []).filter(t =>
+        !t.removed && t.tosStart != null && t.tosEnd != null
+      );
+    }
+
+    // Count shift core time (with last-hour rule before 1900)
+    function shiftCountsHour(shift, h, isEve) {
+      const overlap = Math.min(shift.end, h + 1) - Math.max(shift.start, h);
+      if (overlap < 0.5) return false;
+      if (!isEve && shift.end > h && shift.end <= h + 1) return false;
+      return true;
+    }
+
+    // Count any active TOS interval (extensions before/after shift, etc.)
+    function tosCountsHour(shift, h) {
+      return activeTOSIntervals(shift).some(tos => {
+        const overlap = Math.min(tos.tosEnd, h + 1) - Math.max(tos.tosStart, h);
+        return overlap >= 0.5;
+      });
+    }
+
+    function countsHour(shift, h, isEve) {
+      return shiftCountsHour(shift, h, isEve) || tosCountsHour(shift, h);
+    }
+
     // ── Hourly count row ──
     const dow = new Date(date + 'T12:00:00').getDay();
     const isWeekday = dow >= 1 && dow <= 5;
     const minStaff = isWeekday ? { 6:4, 7:6, 20:8, 21:5, 22:3 } : {};
 
-    html += `<div style="position:relative;height:22px;margin-bottom:4px;">`;
+    html += `<div class="chart-axis" style="height:22px;margin-bottom:4px;">`;
+    html += `<div class="chart-axis-spacer"></div><div class="chart-axis-track">`;
     for (let h = VIEW_START; h < VIEW_END; h++) {
       const h24 = h % 24;
       const isEve = h >= 19;
 
-      // Count everyone working ≥30 min this hour
-      // Before 1900: exclude someone if this hour is their last hour (shift ends within this slot)
-      let count = countable.filter(s => {
-        const overlap = Math.min(s.end, h + 1) - Math.max(s.start, h);
-        if (overlap < 0.5) return false;
-        if (!isEve && s.end > h && s.end <= h + 1) return false; // last hour
-        return true;
-      }).length;
+      // Count everyone working ≥30 min this hour (shift or TOS)
+      let count = countable.filter(s => countsHour(s, h, isEve)).length;
 
       // Subtract anyone on partial leave for ≥30 min this hour
-      // Only subtract if they were actually counted (i.e. in countable and passed the count filter)
       count -= partialLeaves.filter(lv => {
         const shift = countable.find(s => s.name === lv.cpc);
-        if (!shift) return false; // not in countable, already excluded
-        // Check they were actually counted this hour
-        const shiftOverlap = Math.min(shift.end, h + 1) - Math.max(shift.start, h);
-        if (shiftOverlap < 0.5) return false;
-        if (!isEve && shift.end > h && shift.end <= h + 1) return false; // last hour, wasn't counted
-        // Check leave overlaps this hour ≥30 min
+        if (!shift) return false;
+        if (!countsHour(shift, h, isEve)) return false;
         return Math.min(lv.lvEnd, h + 1) - Math.max(lv.lvStart, h) >= 0.5;
       }).length;
       count = Math.max(0, count);
@@ -2252,8 +2305,14 @@
       const leftPct  = ((h - VIEW_START) / span) * 100;
       const widthPct = (1 / span) * 100;
 
+      const isDayWindow = h >= 7 && h < 20; // 0700–2000 hour slots
+
       let bgColor, textColor;
-      if (count === 0) {
+      if (isDayWindow && count < 6) {
+        bgColor = 'rgba(217,79,110,0.4)'; textColor = '#9b1a34';
+      } else if (isDayWindow && count < 7) {
+        bgColor = 'rgba(253,200,60,0.55)'; textColor = '#7a5a00';
+      } else if (count === 0) {
         bgColor = 'transparent'; textColor = 'transparent';
       } else if (minStaff[h24] !== undefined && count < minStaff[h24]) {
         bgColor = 'rgba(217,79,110,0.35)'; textColor = '#9b1a34';
@@ -2263,27 +2322,29 @@
         textColor = '#1a4a7a';
       }
 
+      const showCount = count > 0 || bgColor !== 'transparent';
+
       html += `<div style="
         position:absolute;
-        left:calc(var(--label-w) + ${leftPct}% * (100% - var(--label-w)) / 100%);
-        width:calc(${widthPct}% * (100% - var(--label-w)) / 100%);
+        left:${leftPct}%;
+        width:${widthPct}%;
         top:0;height:100%;
         background:${bgColor};
         border-radius:3px;
         display:flex;align-items:center;justify-content:center;
       ">
-        ${count > 0 ? `<span style="font-family:var(--font-mono);font-size:clamp(8px,1vw,11px);font-weight:700;color:${textColor};">${count}</span>` : ''}
+        ${showCount ? `<span style="font-family:var(--font-mono);font-size:clamp(8px,1vw,11px);font-weight:700;color:${textColor};">${count}</span>` : ''}
       </div>`;
     }
-    html += `</div>`;
-    html += `<div class="grid-and-bars" style="position:relative;">`;
+    html += `</div></div>`;
+    html += `<div class="grid-and-bars"><div class="chart-track">`;
 
     // Single full-height current time line over the entire chart
     if (nowPct >= 0) {
       html += `<div style="
         position:absolute;
         top:0;bottom:0;
-        left:calc(var(--label-w) + ${nowPct}% * (100% - var(--label-w)) / 100%);
+        left:${nowPct}%;
         width:2px;
         background:#d94f6e;
         pointer-events:none;
@@ -2434,46 +2495,18 @@
           const lvLeft  = ((lvVisStart - visStart) / (visEnd - visStart)) * 100;
           const lvWidth = ((lvVisEnd - lvVisStart) / (visEnd - visStart)) * 100;
           const lvLabel = `LV ${formatTime(lv.lvStart)}–${formatTime(lv.lvEnd)}`;
-          const tooNarrow = lvWidth < 10;
+          // Only show label text if it fits on the grey overlay within the bar
+          const showLvLabel = lvWidth >= Math.max(12, lvLabel.length * 0.55);
 
-          if (tooNarrow) {
-            // Is the leave closer to the start or end of the shift?
-            const lvMid = (lv.lvStart + lv.lvEnd) / 2;
-            const shiftMid = (visStart + visEnd) / 2;
-            const atStart = lvMid <= shiftMid;
-
-            // Position label outside the bar: left side if leave is at start, right if at end
-            const labelStyle = atStart
-              ? `right:calc(100% - ${lvLeft}% + 4px);left:auto;transform:none;text-align:right;`
-              : `left:calc(${lvLeft + lvWidth}% + 4px);right:auto;transform:none;text-align:left;`;
-
-            lvOverlays += `<div style="
-              position:absolute;left:${lvLeft}%;width:${lvWidth}%;top:0;bottom:0;
-              background:rgba(160,160,170,0.72);
-              pointer-events:none;z-index:3;
-              overflow:visible;
-            ">
-              <span style="
-                position:absolute;top:50%;${labelStyle}
-                transform:translateY(-50%);
-                white-space:nowrap;
-                font-family:var(--font-display);font-size:10px;font-weight:700;
-                padding:1px 5px;border-radius:3px;
-                pointer-events:none;z-index:10;
-                box-shadow:0 1px 3px rgba(0,0,0,0.1);
-              ">${lvLabel}</span>
-            </div>`;
-          } else {
-            lvOverlays += `<div style="
-              position:absolute;left:${lvLeft}%;width:${lvWidth}%;top:0;bottom:0;
-              background:rgba(160,160,170,0.72);
-              display:flex;align-items:center;justify-content:center;
-              font-family:var(--font-display);font-size:11px;font-weight:700;
-              color:#333;letter-spacing:0.1px;
-              pointer-events:none;z-index:3;
-              overflow:hidden;
-            ">${lvLabel}</div>`;
-          }
+          lvOverlays += `<div style="
+            position:absolute;left:${lvLeft}%;width:${lvWidth}%;top:0;bottom:0;
+            background:rgba(160,160,170,0.72);
+            ${showLvLabel ? 'display:flex;align-items:center;justify-content:center;' : ''}
+            font-family:var(--font-display);font-size:11px;font-weight:700;
+            color:#333;letter-spacing:0.1px;
+            pointer-events:none;z-index:3;
+            overflow:hidden;
+          ">${showLvLabel ? lvLabel : ''}</div>`;
         });
 
         const durLabel = `(${formatDuration(duration)})`;
@@ -2562,15 +2595,8 @@
           ? `<span style="font-weight:900;">${name}</span>`
           : '';
 
-        const hasNarrowLV = partialLeaves.some(lv => {
-          const lvVisStart = Math.max(lv.lvStart, visStart);
-          const lvVisEnd   = Math.min(lv.lvEnd, visEnd);
-          if (lvVisEnd <= lvVisStart) return false;
-          return ((lvVisEnd - lvVisStart) / (visEnd - visStart)) * 100 < 10;
-        });
-
         html += `<div class="shift-bar"
-          style="left:${left}%;width:${width}%;background:${barBg};color:${col.text};overflow:${hasNarrowLV ? 'visible' : 'hidden'};"
+          style="left:${left}%;width:${width}%;background:${barBg};color:${col.text};overflow:hidden;"
           data-id="${shift.id}" data-name="${name}" data-time="${label}"
           data-dur="${formatDuration(duration)}"
           data-start="${shift.start}" data-end="${shift.end}"
@@ -2597,7 +2623,7 @@
       html += `</div></div>`;
     });
 
-    html += `</div></div>`;
+    html += `</div></div></div>`;
     return html;
   }
 
