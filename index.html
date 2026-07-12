@@ -288,6 +288,15 @@
       min-width: 0;
     }
 
+    .hour-count {
+      font-family: var(--font-display);
+      font-size: clamp(10px, 1.2vw, 13px);
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.03em;
+      line-height: 1;
+    }
+
     .chart-track {
       position: relative;
     }
@@ -524,9 +533,11 @@
       min-width: 36px;
       overflow: hidden;
     }
-    .content-layout .requests-wrap.collapsed .requests-body,
-    .content-layout .requests-wrap.collapsed .req-badge {
+    .content-layout .requests-wrap.collapsed .requests-body {
       display: none;
+    }
+    .content-layout .requests-wrap.collapsed .req-badge {
+      display: inline-flex;
     }
     .content-layout .requests-wrap.collapsed .requests-header {
       flex-direction: column;
@@ -959,7 +970,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-07-12l';
+  const BUILD_ID = 'count-2026-07-12o';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1735,6 +1746,31 @@
     '0545-7':[5,45,12,45],'1000-7':[10,0,17,0],'2100':[21,0,29,0],
   };
 
+  function cleanShiftToken(token) {
+    return (token || '').replace(/\s/g, '').replace(/[\$\^\!]/g, '');
+  }
+
+  function shiftMatchesChangeRequest(shift, req) {
+    if (!req || req.cpc !== shift.name) return false;
+    const fromTok = cleanShiftToken(req.from);
+    if (!fromTok || fromTok.toLowerCase() === 'shift' || fromTok.toLowerCase() === 'a') return true;
+    const fromInfo = parseShiftCode(fromTok);
+    if (!fromInfo) return true;
+    return Math.abs(opsStartOf(shift) - fromInfo.start) < 0.02;
+  }
+
+  function applyShiftChangePreview(shift, req) {
+    const info = parseShiftCode(cleanShiftToken(req.to));
+    if (!info) return shift;
+    const previewed = prepareImportedShift(withOpsTimes({ ...shift }, info.start, info.end));
+    return {
+      ...previewed,
+      _origStart: opsStartOf(shift),
+      _origOpsStart: shift.opsStart,
+      _previewShiftChg: true
+    };
+  }
+
   function parseShiftCode(token) {
     // Detail shifts (D/D0700) — not in operation, skip
     if (/^(@D|D)\d/i.test(token)) return null;
@@ -1902,9 +1938,7 @@
 
     // Parse requests + apply approved TOS to shift bars
     const { requests: parsedReqs, tosToApply } = parseRequests(raw, targetDate);
-    if (parsedReqs.length > 0) {
-      requestsByDate[targetDate] = parsedReqs;
-    }
+    requestsByDate[targetDate] = mergeRequestsWithResolved(targetDate, parsedReqs);
     tosToApply.forEach(t => applyTosToShift(targetDate, t.cpc, t.from, t.to, t.type));
     sanitizeRequests();
 
@@ -1998,39 +2032,133 @@
     if (tos) tos.removed = true;
   }
 
+  function parseRequestStatus(status) {
+    const s = (status || '').replace(/!/g, '').trim().toLowerCase();
+    if (s.startsWith('approved')) return 'approved';
+    if (s.startsWith('denied')) return 'denied';
+    if (s.startsWith('pending')) return 'pending';
+    return s || 'pending';
+  }
+
+  function parseRequestCols(line) {
+    const tabCols = line.split('\t').map(c => c.trim());
+    if (tabCols.length >= 6) {
+      return {
+        cpc: tabCols[0],
+        type: tabCols[1],
+        from: tabCols[2] || '',
+        to: tabCols[3] || '',
+        withCol: tabCols[4] || '',
+        status: tabCols[5] || ''
+      };
+    }
+    // Fallback for lines copied with spaces instead of tabs
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 4 && parts[0] !== 'CPC') {
+      const status = parts[parts.length - 1];
+      const statusKind = parseRequestStatus(status);
+      if (statusKind === 'approved' || statusKind === 'denied' || statusKind === 'pending') {
+        return {
+          cpc: parts[0],
+          type: parts[1],
+          from: parts[2] || '',
+          to: parts[3] || '',
+          withCol: parts[4] || '',
+          status
+        };
+      }
+    }
+    return null;
+  }
+
+  function requestMatchKey(r) {
+    return `${r.cpc}|${r.type}|${r.from}|${r.to}`;
+  }
+
+  function mergeRequestsWithResolved(date, parsedReqs) {
+    const existing = requestsByDate[date] || [];
+    const resolvedByKey = new Map();
+    const extras = [];
+    existing.forEach(r => {
+      if (r.resolvedAction) resolvedByKey.set(requestMatchKey(r), r);
+      else if (!parsedReqs.some(p => requestMatchKey(p) === requestMatchKey(r))) extras.push(r);
+    });
+    const merged = parsedReqs.map(r => {
+      const prev = resolvedByKey.get(requestMatchKey(r));
+      if (!prev) return r;
+      return {
+        ...r,
+        resolvedAction: prev.resolvedAction,
+        _expanded: false,
+        _tosEntryId: prev._tosEntryId,
+        _origStart: prev._origStart,
+        _origEnd: prev._origEnd,
+        _origOpsStart: prev._origOpsStart,
+        _origOpsEnd: prev._origOpsEnd,
+        lvStart: prev.lvStart ?? r.lvStart,
+        lvEnd: prev.lvEnd ?? r.lvEnd
+      };
+    });
+    return [...merged, ...extras];
+  }
+
+  function getRequestsForPanel(date) {
+    return (requestsByDate[date] || []).filter(r => {
+      if (r.status === 'approved-partial' && r.lvStart != null && r.lvEnd != null) return false;
+      if (isShiftChangeType(r.type)) {
+        if (r.resolvedAction === 'approve') return false;
+        const kind = parseRequestStatus(r.status || 'pending');
+        return kind === 'pending' || kind === 'denied';
+      }
+      return true;
+    });
+  }
+
+  function rebuildRequestsFromImportRaw() {
+    Object.entries(importRawByDate).forEach(([date, raw]) => {
+      if (!raw || !raw.includes('===REQUESTS_START===')) return;
+      if (!(schedulesByDate[date] || []).length) return;
+      const { requests: parsedReqs } = parseRequests(raw, date);
+      const panelRows = getRequestsForPanel(date);
+      if (panelRows.length === 0 && parsedReqs.length > 0) {
+        requestsByDate[date] = mergeRequestsWithResolved(date, parsedReqs);
+      }
+    });
+    sanitizeRequests();
+  }
+
   function parseRequests(raw, targetDate) {
     const reqStart = raw.indexOf('===REQUESTS_START===');
     if (reqStart === -1) return { requests: [], tosToApply: [] };
 
     const section = raw.slice(reqStart + '===REQUESTS_START==='.length).trim();
-    const lines = section.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = section.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const requests = [];
     const tosToApply = [];
 
     for (const line of lines) {
-      const cols = line.split('\t');
-      if (cols.length < 6) continue;
-      const [cpc, type, from, to, withCol, status] = cols.map(c => c.trim());
+      const cols = parseRequestCols(line);
+      if (!cols) continue;
+      const { cpc, type, from, to, withCol, status } = cols;
       // Skip header rows
       if (cpc === 'CPC' && type === 'TYPE') continue;
       if (!cpc || !type || !status) continue;
 
-      const statusClean = status.replace('!','').trim().toLowerCase();
-      const isApproved = statusClean === 'approved';
-      const isDenied   = statusClean === 'denied';
-      const isPending  = !isApproved && !isDenied;
+      const statusKind = parseRequestStatus(status);
+      const isApproved = statusKind === 'approved';
+      const isDenied   = statusKind === 'denied';
+      const isPending  = statusKind === 'pending' || (!isApproved && !isDenied);
 
       const shiftChange = isShiftChangeType(type);
 
-      // Shift changes: schedule lines are source of truth. Approved ones are
-      // already reflected in the shift table — never count as leave or partial leave.
-      // Only denied shift changes appear in the requests panel.
+      // Shift changes: approved ones are already in the schedule — ignore those.
+      // Pending and denied shift changes appear in the requests panel.
       if (shiftChange) {
-        if (isDenied) {
+        if (isDenied || isPending) {
           requests.push({
             id: Date.now() + Math.random(),
             cpc, type, from, to, withCol,
-            status: 'denied',
+            status: isDenied ? 'denied' : 'pending',
             isLeave: false,
             isPartial: false,
             isShiftChange: true,
@@ -2112,20 +2240,37 @@
     Object.keys(requestsByDate).forEach(date => {
       requestsByDate[date] = (requestsByDate[date] || [])
         .filter(r => {
-          // Remove legacy rows where approved shift chg was stored as partial leave
-          if (isShiftChangeType(r.type) && (r.status === 'approved-partial' || r.resolvedAction === 'approve')) {
-            return false;
+          if (isShiftChangeType(r.type)) {
+            if (r.resolvedAction === 'approve') return false;
+            const kind = parseRequestStatus(r.status || '');
+            return kind !== 'approved';
           }
           return true;
         })
         .map(r => {
           if (isShiftChangeType(r.type)) {
-            return { ...r, isLeave: false, isPartial: false, isShiftChange: true };
+            const fixed = { ...r, isLeave: false, isPartial: false, isShiftChange: true };
+            if (fixed.status === 'approved-partial' && !fixed.resolvedAction) {
+              fixed.status = 'pending';
+            }
+            return fixed;
           }
           if (isTOSType(r.type)) {
             const tosStart = r.tosStart != null ? r.tosStart : parseTimeStr(r.from);
             const tosEnd   = r.tosEnd   != null ? r.tosEnd   : parseTimeStr(r.to);
-            return { ...r, isTOS: true, isLeave: false, isPartial: false, tosStart, tosEnd };
+            // Fix legacy rows where pending TOS was stored as approved-partial leave
+            const fixed = {
+              ...r,
+              isTOS: true,
+              isLeave: false,
+              isPartial: false,
+              tosStart,
+              tosEnd
+            };
+            if (fixed.status === 'approved-partial' && !fixed.resolvedAction) {
+              fixed.status = 'pending';
+            }
+            return fixed;
           }
           return r;
         });
@@ -2145,38 +2290,41 @@
 
   function renderRequests() {
     const date = getActiveDate();
-    const reqs = (requestsByDate[date] || []).filter(r => r.status !== 'approved-partial');
+    const reqs = getRequestsForPanel(date);
     const wrap = document.getElementById('requestsWrap');
     const body = document.getElementById('requestsBody');
     const badge = document.getElementById('reqBadge');
+    if (!wrap || !body || !badge) return;
 
     const active = reqs.filter(r => !r.resolvedAction);
 
     if (reqs.length === 0) {
       wrap.style.display = 'none';
+      body.innerHTML = '<div class="req-empty">No pending or denied requests</div>';
+      badge.textContent = '0';
       return;
     }
 
-    // Keep panel visible (collapsed or expanded) once it has requests
-    if (wrap.style.display === 'none') {
-      wrap.style.display = 'flex';
+    wrap.style.display = 'flex';
+    if (active.length > 0 && wrap.classList.contains('collapsed')) {
+      wrap.classList.remove('collapsed');
+      const btn = document.getElementById('reqCollapseBtn');
+      if (btn) {
+        btn.textContent = '›';
+        btn.title = 'Hide requests';
+      }
     }
     badge.textContent = active.length;
-
-    if (reqs.length === 0) {
-      body.innerHTML = '<div class="req-empty">No pending or denied requests</div>';
-      return;
-    }
 
     body.innerHTML = reqs.map(req => {
       const typeName = REQUEST_TYPE_LABELS[req.type] || req.type;
       const fromTo = req.from && req.to ? `${req.from} → ${req.to}` : req.from || '';
       const withStr = req.withCol ? ` · with ${req.withCol}` : '';
-      const statusClass = req.resolvedAction ? `status-resolved-${req.resolvedAction}` : `status-${req.status}`;
+      const statusClass = req.resolvedAction ? `status-resolved-${req.resolvedAction}` : `status-${req.status || 'pending'}`;
       const statusLabel = req.resolvedAction
         ? (req.resolvedAction === 'approve' ? '✓ Approved' : '✗ Denied')
-        : req.status.charAt(0).toUpperCase() + req.status.slice(1);
-      const statusBadgeClass = req.resolvedAction ? '' : req.status;
+        : (req.status ? req.status.charAt(0).toUpperCase() + req.status.slice(1) : 'Pending');
+      const statusBadgeClass = req.resolvedAction ? '' : (req.status || 'pending');
 
       // Unresolved pending cards — collapsed by default unless _expanded
       if (!req.resolvedAction && !req._expanded) {
@@ -2272,7 +2420,7 @@
       const shifts = schedulesByDate[date] || [];
       const shift = shifts.find(s => s.name === req.cpc);
         if (shift && req.to) {
-        const info = parseShiftCode(req.to.replace(/\s/g,''));
+        const info = parseShiftCode(cleanShiftToken(req.to));
         if (info) {
           // Save original so we can undo
           req._origStart = shift.start;
@@ -2697,11 +2845,10 @@
       .filter(Boolean);
 
     const displayShifts = shiftsForDate.map(s => {
-      const pr = displayPreviewReqs.find(r => isShiftChangeType(r.type) && r.cpc === s.name && r.to);
-      if (pr) {
-        const info = parseShiftCode(pr.to.replace(/\s/g,''));
-        if (info) return { ...s, start: info.start, end: info.end, _origStart: s.start };
-      }
+      const pr = displayPreviewReqs.find(r =>
+        isShiftChangeType(r.type) && r.to && shiftMatchesChangeRequest(s, r)
+      );
+      if (pr) return applyShiftChangePreview(s, pr);
       return s;
     });
 
@@ -2799,7 +2946,7 @@
         display:flex;align-items:center;justify-content:center;
         cursor:help;
       " title="${tip.replace(/"/g, '&quot;')}">
-        ${showCount ? `<span style="font-family:var(--font-mono);font-size:clamp(8px,1vw,11px);font-weight:700;color:${textColor};">${count}</span>` : ''}
+        ${showCount ? `<span class="hour-count" style="color:${textColor};">${count}</span>` : ''}
       </div>`;
     });
     html += `</div></div>`;
@@ -3043,7 +3190,7 @@
           ? `<span style="font-weight:600;">${name}</span>`
           : '';
 
-        html += `<div class="shift-bar"
+        html += `<div class="shift-bar${shift._previewShiftChg ? ' visualize-glow' : ''}"
           style="left:${left}%;width:${width}%;background:${barBg};color:${col.text};overflow:hidden;"
           data-id="${shift.id}" data-name="${name}" data-time="${label}"
           data-dur="${formatDuration(duration)}"
@@ -3523,6 +3670,7 @@
       sanitizeRequests();
       if (data.rowOrderByDate)  Object.assign(rowOrderByDate,  data.rowOrderByDate);
       if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
+      rebuildRequestsFromImportRaw();
     } catch(e) { console.warn('Load failed:', e); }
   }
 
