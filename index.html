@@ -120,6 +120,24 @@
       border: 1px solid var(--border);
     }
     .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); background: var(--surface2); }
+    .btn-paste-schedule {
+      border-color: var(--accent5);
+      color: var(--accent5);
+    }
+    .btn-paste-schedule:hover {
+      border-color: var(--accent5);
+      color: var(--accent5);
+      background: rgba(34, 160, 107, 0.08);
+    }
+    .btn-paste-wx {
+      border-color: #5b9bd5;
+      color: #5b9bd5;
+    }
+    .btn-paste-wx:hover {
+      border-color: #5b9bd5;
+      color: #5b9bd5;
+      background: rgba(91, 155, 213, 0.08);
+    }
     .btn-danger {
       background: rgba(217,79,110,0.08);
       color: var(--accent2);
@@ -349,9 +367,9 @@
       justify-content: center;
       padding: 0 6px;
       font-size: 8px; /* overridden by fitRows inline style */
-      font-weight: 700;
+      font-weight: 500;
       font-family: var(--font-display);
-      letter-spacing: 0.2px;
+      letter-spacing: 0.15px;
       cursor: pointer;
       transition: filter 0.15s, transform 0.15s, box-shadow 0.15s;
       white-space: nowrap;
@@ -360,7 +378,7 @@
       min-width: 4px;
       user-select: none;
       box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-      text-shadow: 0 1px 2px rgba(0,0,0,0.25);
+      text-shadow: 0 1px 1px rgba(0,0,0,0.18);
     }
     .shift-bar:hover {
       filter: brightness(1.08);
@@ -374,7 +392,7 @@
       text-overflow: ellipsis;
       white-space: nowrap;
       font-size: inherit;
-      font-weight: 900;
+      font-weight: 500;
       opacity: 1;
       text-align: center;
       width: 100%;
@@ -884,8 +902,8 @@
         </div>
       </div>
     </div>
-    <button class="btn btn-ghost" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
-    <button class="btn btn-ghost" onclick="pasteWX()" id="wxBtn">✓ Paste Pre-Duty WX</button>
+    <button class="btn btn-ghost btn-paste-schedule" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
+    <button class="btn btn-ghost btn-paste-wx" onclick="pasteWX()" id="wxBtn">✓ Paste Pre-Duty WX</button>
     <button class="btn btn-ghost" onclick="undoAction()" id="undoBtn" disabled title="Undo">↩ Undo</button>
     <button class="btn btn-ghost" onclick="redoAction()" id="redoBtn" disabled title="Redo">↪ Redo</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
@@ -941,7 +959,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-07-11i';
+  const BUILD_ID = 'count-2026-07-12l';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -998,6 +1016,8 @@
     const graphNames = new Set(getActiveShifts().map(s => s.name.toUpperCase()));
     for (const ini of found) { if (!graphNames.has(ini)) found.delete(ini); }
 
+    snapshot('Apply WX marks');
+
     // Update wxInitials: remove those not in new text, add new ones
     for (const ini of [...wxInitials]) {
       if (!found.has(ini)) wxInitials.delete(ini);
@@ -1007,12 +1027,78 @@
     render();
   }
 
+  function currentTimelineHour() {
+    const now = new Date();
+    const nowH = now.getHours() + now.getMinutes() / 60;
+    return nowH < VIEW_START ? nowH + 24 : nowH;
+  }
+
+  function shiftContainsTimelineHour(shift, date, hour) {
+    const span = shiftBarSpan(shift, date);
+    return hour >= span.start && hour < span.end;
+  }
+
+  // When someone has day + overnight rows, show WX only on the shift they are in right now.
+  function wxShiftForName(name, shifts, date) {
+    if (!wxInitials.has(name)) return null;
+    const personShifts = shifts.filter(s => s.name === name);
+    if (personShifts.length === 0) return null;
+    if (personShifts.length === 1) return personShifts[0];
+
+    const hour = currentTimelineHour();
+    const active = personShifts.filter(s => shiftContainsTimelineHour(s, date, hour));
+    if (active.length === 1) return active[0];
+    if (active.length > 1) {
+      return active.sort((a, b) => opsStartOf(a) - opsStartOf(b))[0];
+    }
+    return null;
+  }
+
+  function shouldShowWxOnShift(shift, shifts, date) {
+    const target = wxShiftForName(shift.name, shifts, date);
+    return target != null && String(target.id) === String(shift.id);
+  }
+
   // ── Undo / Redo ──
   const undoStack = [];
   const redoStack = [];
 
+  function captureAppState() {
+    return {
+      schedulesByDate: JSON.parse(JSON.stringify(schedulesByDate)),
+      requestsByDate: JSON.parse(JSON.stringify(requestsByDate)),
+      rowOrderByDate: JSON.parse(JSON.stringify(rowOrderByDate)),
+      importRawByDate: JSON.parse(JSON.stringify(importRawByDate)),
+      wxInitials: [...wxInitials],
+      previewReqIds: [...previewReqIds],
+    };
+  }
+
+  function restoreAppState(snap) {
+    const state = snap.state || {
+      schedulesByDate: snap.s || {},
+      requestsByDate: snap.r || {},
+      rowOrderByDate: {},
+      importRawByDate: {},
+      wxInitials: [],
+      previewReqIds: [],
+    };
+    Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
+    Object.assign(schedulesByDate, state.schedulesByDate);
+    Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
+    Object.assign(requestsByDate, state.requestsByDate);
+    Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
+    Object.assign(rowOrderByDate, state.rowOrderByDate || {});
+    Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
+    Object.assign(importRawByDate, state.importRawByDate || {});
+    wxInitials.clear();
+    (state.wxInitials || []).forEach(i => wxInitials.add(i));
+    previewReqIds.clear();
+    (state.previewReqIds || []).forEach(id => previewReqIds.add(String(id)));
+  }
+
   function snapshot(label) {
-    undoStack.push({ label, s: JSON.parse(JSON.stringify(schedulesByDate)), r: JSON.parse(JSON.stringify(requestsByDate)) });
+    undoStack.push({ label, state: captureAppState() });
     redoStack.length = 0;
     if (undoStack.length > 50) undoStack.shift();
     updateUndoRedoBtns();
@@ -1026,13 +1112,11 @@
   }
 
   function applySnap(snap, pushTo) {
-    pushTo.push({ label: snap.label, s: JSON.parse(JSON.stringify(schedulesByDate)), r: JSON.parse(JSON.stringify(requestsByDate)) });
-    Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
-    Object.assign(schedulesByDate, snap.s);
-    Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
-    Object.assign(requestsByDate, snap.r);
-    previewReqIds.clear();
-    render(); renderRequests();
+    pushTo.push({ label: snap.label, state: captureAppState() });
+    restoreAppState(snap);
+    render();
+    renderRequests();
+    if (_modalShiftId) _renderShiftModal();
     updateUndoRedoBtns();
   }
 
@@ -1123,6 +1207,7 @@
 
     currentOrder.splice(fromIdx, 1);
     currentOrder.splice(toIdx, 0, _dragRowKey);
+    snapshot('Reorder rows');
     rowOrderByDate[date] = currentOrder;
 
     render();
@@ -1133,6 +1218,63 @@
     e.currentTarget.classList.remove('dragging');
     document.querySelectorAll('.employee-row').forEach(r => r.classList.remove('drag-over'));
     _dragRowKey = null;
+  }
+
+  function buildByEmployee(shifts) {
+    const byEmployee = {};
+    shifts.forEach(s => {
+      const rowStart = s._origStart !== undefined ? s._origStart : opsStartOf(s);
+      const isNight  = rowStart >= 20;
+      const hasDay   = shifts.some(o => o.name === s.name && (o._origStart ?? opsStartOf(o)) < 20);
+      const hasNight = shifts.some(o => o.name === s.name && (o._origStart ?? opsStartOf(o)) >= 20);
+      const rowKey   = (isNight && hasDay && hasNight) ? s.name + '\u200B' : s.name;
+      if (!byEmployee[rowKey]) byEmployee[rowKey] = [];
+      byEmployee[rowKey].push(s);
+    });
+    return byEmployee;
+  }
+
+  function rowTimelineSortSpan(shifts, date) {
+    let start = Infinity, end = -Infinity;
+    shifts.forEach(s => {
+      const span = shiftBarSpan(s, date);
+      start = Math.min(start, span.start);
+      end = Math.max(end, span.end);
+    });
+    return { start, end };
+  }
+
+  function sortEmployeeRowEntries(byEmployee, date, previewStable = false) {
+    const entries = Object.entries(byEmployee).sort((a, b) => {
+      if (previewStable) {
+        const aStart = Math.min(...a[1].map(s => s._origStart ?? opsStartOf(s)));
+        const bStart = Math.min(...b[1].map(s => s._origStart ?? opsStartOf(s)));
+        if (aStart !== bStart) return aStart - bStart;
+        const aEnd = Math.max(...a[1].map(s => {
+          if (s._origStart !== undefined) return s._origStart + (opsEndOf(s) - opsStartOf(s));
+          return opsEndOf(s);
+        }));
+        const bEnd = Math.max(...b[1].map(s => {
+          if (s._origStart !== undefined) return s._origStart + (opsEndOf(s) - opsStartOf(s));
+          return opsEndOf(s);
+        }));
+        return aEnd - bEnd;
+      }
+      const aSpan = rowTimelineSortSpan(a[1], date);
+      const bSpan = rowTimelineSortSpan(b[1], date);
+      if (aSpan.start !== bSpan.start) return aSpan.start - bSpan.start;
+      return aSpan.end - bSpan.end;
+    });
+    const dayRows   = entries.filter(([, shifts]) => shifts.every(s => (s._origStart ?? opsStartOf(s)) < 20));
+    const nightRows = entries.filter(([, shifts]) => shifts.some(s  => (s._origStart ?? opsStartOf(s)) >= 20));
+    return [...dayRows, ...nightRows];
+  }
+
+  function refreshRowOrder(date) {
+    const shifts = schedulesByDate[date];
+    if (!shifts || !shifts.length) return;
+    const byEmployee = buildByEmployee(shifts);
+    rowOrderByDate[date] = sortEmployeeRowEntries(byEmployee, date, false).map(([k]) => k);
   }
 
   // ── Paste Pending Requests ──
@@ -1169,6 +1311,7 @@
       alert('Invalid format. Use the 📝 Copy Requests bookmarklet on the All Pending Requests page.');
       return;
     }
+    snapshot('Paste pending requests');
     const lines = normalized.split('\n').map(l => l.trim()).filter(Boolean);
     const startIdx = lines.indexOf('===PENDING_REQUESTS===');
     let imported = 0;
@@ -1283,6 +1426,8 @@
     const ppIdx = lines.indexOf('===PAY_PERIOD===');
     const schIdx = lines.indexOf('===PP_SCHEDULE===');
     if (ppIdx === -1 || schIdx === -1) { alert('Invalid pay period format.'); return; }
+
+    snapshot('Paste pay period');
 
     const dateStrs = lines[ppIdx + 1].split(',');
     // Convert MM/DD/YYYY to YYYY-MM-DD
@@ -1666,7 +1811,6 @@
   }
 
   function importFromText(raw) {
-    snapshot('Paste Schedule');
     const btn = document.getElementById('pasteBtn');
 
     // Extract date
@@ -1724,6 +1868,8 @@
       showPasteFeedback(btn, '⚠ No valid shifts found', true);
       return;
     }
+
+    snapshot('Paste schedule');
 
     const targetDate = importedDate || localDateStr();
     const targetDateObj = new Date(targetDate + 'T12:00:00');
@@ -2138,6 +2284,10 @@
       }
     }
 
+    if (action === 'approve' && (isTOSType(req.type) || isShiftChangeType(req.type))) {
+      refreshRowOrder(date);
+    }
+
     render();
     renderRequests();
   }
@@ -2457,6 +2607,7 @@
     if (!start || !end) { alert('Please set start and end times.'); return; }
     const s = parseTime(start), e = parseTime(end);
     if (e <= s) { alert('End time must be after start time.'); return; }
+    snapshot(`Add shift ${name}`);
     const dateVal = getActiveDate();
     if (!schedulesByDate[dateVal]) schedulesByDate[dateVal] = [];
     schedulesByDate[dateVal].push(prepareImportedShift(withOpsTimes({ id: Date.now(), name }, s, e)));
@@ -2468,14 +2619,16 @@
 
   function deleteShift(id) {
     const d = getActiveDate();
+    const shift = (schedulesByDate[d] || []).find(s => String(s.id) === String(id));
+    snapshot(shift ? `Delete shift ${shift.name}` : 'Delete shift');
     if (schedulesByDate[d]) schedulesByDate[d] = schedulesByDate[d].filter(s => String(s.id) !== String(id));
     render();
     renderRequests();
   }
 
   function clearAllDays() {
-    snapshot('Clear All Days');
     if (!confirm('Clear all schedules and requests for every day?')) return;
+    snapshot('Clear all days');
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
     Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
     Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
@@ -2488,6 +2641,7 @@
   function clearAll() {
     const d = getActiveDate();
     if (!(schedulesByDate[d] || []).length || confirm(`Clear all shifts for ${d}?`)) {
+      snapshot(`Clear ${d}`);
       delete schedulesByDate[d];
       render();
     }
@@ -2551,16 +2705,7 @@
       return s;
     });
 
-    const byEmployee = {};
-    displayShifts.forEach(s => {
-      const rowStart = s._origStart !== undefined ? s._origStart : s.start;
-      const isNight  = rowStart >= 20;
-      const hasDay   = displayShifts.some(o => o.name === s.name && (o._origStart ?? o.start) < 20);
-      const hasNight = displayShifts.some(o => o.name === s.name && (o._origStart ?? o.start) >= 20);
-      const rowKey   = (isNight && hasDay && hasNight) ? s.name + '\u200B' : s.name;
-      if (!byEmployee[rowKey]) byEmployee[rowKey] = [];
-      byEmployee[rowKey].push(s);
-    });
+    const byEmployee = buildByEmployee(displayShifts);
 
     let html = `<div class="timeline-container">`;
 
@@ -2675,15 +2820,7 @@
     }
 
     const sortDate = getActiveDate();
-    const defaultOrder = Object.entries(byEmployee).sort((a, b) => {
-      // Use _origStart if available so preview doesn't change row order
-      const aStart = Math.min(...a[1].map(s => s._origStart ?? s.start));
-      const bStart = Math.min(...b[1].map(s => s._origStart ?? s.start));
-      if (aStart !== bStart) return aStart - bStart;
-      const aEnd = Math.max(...a[1].map(s => s._origStart !== undefined ? s._origStart + (s.end - s.start) : s.end));
-      const bEnd = Math.max(...b[1].map(s => s._origStart !== undefined ? s._origStart + (s.end - s.start) : s.end));
-      return aEnd - bEnd;
-    });
+    const defaultOrder = sortEmployeeRowEntries(byEmployee, sortDate, true);
 
     // Apply custom row order if set, preserving any new rows at the end
     const savedOrder = rowOrderByDate[sortDate];
@@ -2693,15 +2830,13 @@
       const ordered = savedOrder.filter(k => empMap[k]).map(k => [k, empMap[k]]);
       const newRows = defaultOrder.filter(([k]) => !savedOrder.includes(k));
       sortedEmployees = [...ordered, ...newRows];
+      const dayRows   = sortedEmployees.filter(([, shifts]) => shifts.every(s => (s._origStart ?? opsStartOf(s)) < 20));
+      const nightRows = sortedEmployees.filter(([, shifts]) => shifts.some(s  => (s._origStart ?? opsStartOf(s)) >= 20));
+      sortedEmployees = [...dayRows, ...nightRows];
     } else {
       sortedEmployees = defaultOrder;
       rowOrderByDate[sortDate] = defaultOrder.map(([k]) => k);
     }
-
-    // Always force overnight shifts (start >= 20) to the bottom
-    const dayRows   = sortedEmployees.filter(([, shifts]) => shifts.every(s => (s._origStart ?? s.start) < 20));
-    const nightRows = sortedEmployees.filter(([, shifts]) => shifts.some(s  => (s._origStart ?? s.start) >= 20));
-    sortedEmployees = [...dayRows, ...nightRows];
 
     sortedEmployees.forEach(([rowKey, empShifts]) => {
       const name = rowKey.replace(/\u200B/g, '');
@@ -2860,8 +2995,8 @@
         const gapBefore = prevS ? shift.start - prevS.end : null;
         const gapAfter  = nextS ? nextS.start - shift.end : null;
 
-        const gapBeforeStyle = (gapBefore !== null && gapBefore < 10) ? 'font-weight:700;color:#d94f6e;' : 'opacity:0.55;';
-        const gapAfterStyle  = (gapAfter  !== null && gapAfter  < 10) ? 'font-weight:700;color:#d94f6e;' : 'opacity:0.55;';
+        const gapBeforeStyle = (gapBefore !== null && gapBefore < 10) ? 'font-weight:600;color:#ffb3c6;' : 'opacity:0.95;font-weight:500;';
+        const gapAfterStyle  = (gapAfter  !== null && gapAfter  < 10) ? 'font-weight:600;color:#ffb3c6;' : 'opacity:0.95;font-weight:500;';
 
         const gapBeforeStr = (gapBefore !== null && gapBefore > 0) ? `◀ ${formatDuration(gapBefore)}` : null;
         const gapAfterStr  = (gapAfter  !== null && gapAfter  > 0) ? `${formatDuration(gapAfter)} ▶` : null;
@@ -2896,16 +3031,16 @@
 
         const blueWidth = Math.max(0, 100 - blueLeft - blueRight);
 
-        const wxMark = wxInitials.has(name)
+        const wxMark = shouldShowWxOnShift(shift, displayShifts, date)
           ? `<span style="position:absolute;left:4px;top:50%;transform:translateY(-50%);font-size:0.85em;font-weight:900;white-space:nowrap;pointer-events:none;z-index:10;"><span style="color:#22c55e;">✓</span> WX</span>`
           : '';
 
         const barContent = width > 18
-          ? `${gapBeforeStr ? `<span style="${gapBeforeStyle}margin-right:6px;font-size:0.85em;">${gapBeforeStr}</span>` : ''}<span style="font-weight:900;margin-right:6px;">${name}</span><span style="font-weight:700;">${label}</span><span style="opacity:0.8;margin-left:5px;font-size:0.85em;">${durLabel}</span>${gapAfterStr ? `<span style="${gapAfterStyle}margin-left:6px;font-size:0.85em;">${gapAfterStr}</span>` : ''}`
+          ? `${gapBeforeStr ? `<span style="${gapBeforeStyle}margin-right:6px;font-size:0.85em;">${gapBeforeStr}</span>` : ''}<span style="font-weight:600;margin-right:6px;">${name}</span><span style="font-weight:500;">${label}</span><span style="opacity:0.85;margin-left:5px;font-size:0.85em;font-weight:500;">${durLabel}</span>${gapAfterStr ? `<span style="${gapAfterStyle}margin-left:6px;font-size:0.85em;">${gapAfterStr}</span>` : ''}`
           : width > 10
-          ? `<span style="font-weight:900;margin-right:5px;">${name}</span><span style="font-weight:700;">${label}</span>`
+          ? `<span style="font-weight:600;margin-right:5px;">${name}</span><span style="font-weight:500;">${label}</span>`
           : width > 5
-          ? `<span style="font-weight:900;">${name}</span>`
+          ? `<span style="font-weight:600;">${name}</span>`
           : '';
 
         html += `<div class="shift-bar"
@@ -3053,6 +3188,7 @@
     const allShifts = getActiveShifts();
     const shift = allShifts.find(s => String(s.id) === String(_modalShiftId));
     if (!shift) return;
+    snapshot(`${cb.checked ? 'Include' : 'Exclude'} ${shift.name} from staffing`);
     shift.countForStaffing = cb.checked;
     render();
     renderRequests();
@@ -3064,7 +3200,6 @@
     const shifts = schedulesByDate[date] || [];
     const shift = shifts.find(s => String(s.id) === String(shiftId));
     if (!shift) return;
-    snapshot(`Edit shift ${shift.name}`);
 
     const startRaw = document.getElementById('modalStartTime').value.trim();
     const dur = parseFloat(document.getElementById('modalDuration').value);
@@ -3073,6 +3208,8 @@
     const m = startRaw.match(/^(\d{1,2}):?(\d{2})$/);
     if (!m) { alert('Enter start time as HHMM, e.g. 0700'); return; }
     if (isNaN(dur) || dur <= 0 || dur > 14) { alert('Duration must be between 1 and 14 hours.'); return; }
+
+    snapshot(`Edit shift ${shift.name}`);
 
     const newStart = parseInt(m[1]) + parseInt(m[2]) / 60;
     const newEnd   = newStart + dur;
@@ -3084,8 +3221,9 @@
     const repaired = repairShiftTimes(shift);
     Object.assign(shift, repaired);
 
+    refreshRowOrder(date);
     render();
-    _renderShiftModal();
+    closeShiftModal();
   }
 
   function openShiftModal(shiftId, e) {
@@ -3217,6 +3355,7 @@
     const reqs = requestsByDate[date] || [];
     const req = reqs.find(r => String(r.id) === String(leaveId));
     if (req) {
+      snapshot(`Remove leave – ${req.cpc}`);
       // Preserve originals before nulling (handles both pasted and manually-added leave)
       req._lvStartOrig = req._lvStartOrig ?? req.lvStart;
       req._lvEndOrig   = req._lvEndOrig   ?? req.lvEnd;
@@ -3235,6 +3374,7 @@
     const reqs = requestsByDate[date] || [];
     const req = reqs.find(r => String(r.id) === String(leaveId));
     if (req) {
+      snapshot(`Re-add leave – ${req.cpc}`);
       req.lvStart = req._lvStartOrig;
       req.lvEnd   = req._lvEndOrig;
       req._leaveRemoved = false;
@@ -3250,7 +3390,11 @@
     const shift = _getModalShift();
     if (!shift || !shift.tosList) return;
     const tos = shift.tosList.find(t => String(t.id) === String(tosId));
-    if (tos) tos.removed = true;
+    if (tos) {
+      snapshot(`Remove TOS – ${shift.name}`);
+      tos.removed = true;
+    }
+    refreshRowOrder(getActiveDate());
     render();
     _renderShiftModal();
   }
@@ -3259,7 +3403,11 @@
     const shift = _getModalShift();
     if (!shift || !shift.tosList) return;
     const tos = shift.tosList.find(t => String(t.id) === String(tosId));
-    if (tos) tos.removed = false;
+    if (tos) {
+      snapshot(`Re-add TOS – ${shift.name}`);
+      tos.removed = false;
+    }
+    refreshRowOrder(getActiveDate());
     render();
     _renderShiftModal();
   }
@@ -3294,6 +3442,8 @@
     const { start: lvStart, end: lvEnd } = range;
     if (lvEnd <= lvStart) { alert('End must be after start.'); return; }
 
+    snapshot(`Add leave – ${shift.name}`);
+
     if (!requestsByDate[date]) requestsByDate[date] = [];
     requestsByDate[date].push({
       id: Date.now() + Math.random(),
@@ -3313,8 +3463,7 @@
 
     render();
     renderRequests();
-    toggleAddForm('addLeaveForm');
-    _renderShiftModal();
+    closeShiftModal();
   }
 
   function confirmAddTOS() {
@@ -3329,6 +3478,8 @@
     const { start: tosStart, end: tosEnd } = range;
     if (tosEnd <= tosStart) { alert('End must be after start.'); return; }
 
+    snapshot(`Add TOS – ${shift.name}`);
+
     if (!shift.tosList) shift.tosList = [];
     shift.tosList.push({
       id: Date.now() + Math.random(),
@@ -3338,9 +3489,9 @@
       removed: false
     });
 
+    refreshRowOrder(getActiveDate());
     render();
-    toggleAddForm('addTOSForm');
-    _renderShiftModal();
+    closeShiftModal();
   }
 
   // ── Persistence ──
@@ -3416,6 +3567,19 @@
     }
     render();
     renderRequests();
+
+    document.addEventListener('keydown', e => {
+      if (e.target.matches('input, textarea, select')) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undoAction();
+      } else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redoAction();
+      }
+    });
 
     const ro = new ResizeObserver(() => fitRows());
     const cb = document.querySelector('.chart-body');
