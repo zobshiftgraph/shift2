@@ -970,7 +970,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-07-12o';
+  const BUILD_ID = 'count-2026-07-15a';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -2277,8 +2277,14 @@
     });
   }
 
-  function getPartialLeaveRequests(reqs, onLeave) {
-    return reqs.filter(r =>
+  function enrichPartialLeave(r) {
+    const lvStart = r.lvStart != null ? r.lvStart : parseTimeStr(r.from);
+    const lvEnd   = r.lvEnd   != null ? r.lvEnd   : parseTimeStr(r.to);
+    return { ...r, lvStart, lvEnd };
+  }
+
+  function getPartialLeaveRequests(reqs, onLeave, previewReqs = []) {
+    const approved = reqs.filter(r =>
       !isShiftChangeType(r.type) &&
       !isTOSType(r.type) &&
       r.isLeave && r.isPartial &&
@@ -2286,6 +2292,40 @@
       (r.resolvedAction === 'approve' || r.status === 'approved-partial') &&
       !onLeave.has(r.cpc)
     );
+
+    const previewPartial = previewReqs.filter(r =>
+      !isShiftChangeType(r.type) &&
+      !isTOSType(r.type) &&
+      r.isLeave && r.isPartial &&
+      !onLeave.has(r.cpc)
+    ).map(enrichPartialLeave).filter(r => r.lvStart != null && r.lvEnd != null);
+
+    return [...approved, ...previewPartial];
+  }
+
+  function buildOnLeaveSet(allReqs, previewReqs) {
+    return new Set([
+      ...allReqs.filter(r =>
+        !isShiftChangeType(r.type) &&
+        r.isLeave && !r.isPartial &&
+        r.resolvedAction === 'approve'
+      ).map(r => r.cpc),
+      ...previewReqs.filter(r =>
+        !isShiftChangeType(r.type) &&
+        r.isLeave && !r.isPartial
+      ).map(r => r.cpc),
+    ]);
+  }
+
+  function buildHourlyCountContext(date, shifts, previewReqs) {
+    const allReqs = requestsByDate[date] || [];
+    const onLeave = buildOnLeaveSet(allReqs, previewReqs);
+    const partialLeaves = getPartialLeaveRequests(allReqs, onLeave, previewReqs);
+    return {
+      onLeave,
+      partialLeaves,
+      hourCounts: hourlyStaffCounts(shifts, partialLeaves, onLeave, date),
+    };
   }
 
   function renderRequests() {
@@ -2651,8 +2691,8 @@
     return shift.dev && !shift.countForStaffing;
   }
 
-  function shiftCountsInHour(shift, hour) {
-    const vis = visibleSpan(shiftBarSpan(shift));
+  function shiftCountsInHour(shift, hour, date) {
+    const vis = visibleSpan(shiftBarSpan(shift, date));
     return slotOverlap(vis, hour) >= 0.5;
   }
 
@@ -2661,7 +2701,8 @@
     return end > hour && end <= hour + 1;
   }
 
-  function hourlyStaffCounts(shifts, partialLeaves, onLeave) {
+  function hourlyStaffCounts(shifts, partialLeaves, onLeave, date) {
+    const countDate = date || getActiveDate();
     const DAY_SLOT_START = 5;   // 0500
     const DAY_SLOT_END = 20;    // slots 5–19 → 0500 through 1959
     const EVE_SLOT_START = 20;  // 2000
@@ -2676,7 +2717,7 @@
 
       shifts.forEach(s => {
         if (onLeave.has(s.name)) return;
-        if (!shiftCountsInHour(s, h)) return;
+        if (!shiftCountsInHour(s, h, countDate)) return;
         if (isDayStaffing) {
           if (s.cic || isTraineeExcluded(s)) return;
           if (inLastHourOfShift(s, h)) return;
@@ -2710,12 +2751,8 @@
 
   function buildStaffCountContext(date) {
     const shifts = schedulesByDate[date] || [];
-    const allReqs = requestsByDate[date] || [];
-    const onLeave = new Set(
-      allReqs.filter(r => !isShiftChangeType(r.type) && r.isLeave && !r.isPartial && r.resolvedAction === 'approve').map(r => r.cpc)
-    );
-    const partialLeaves = getPartialLeaveRequests(allReqs, onLeave);
-    return { shifts, onLeave, partialLeaves, hourCounts: hourlyStaffCounts(shifts, partialLeaves, onLeave) };
+    const ctx = buildHourlyCountContext(date, shifts, []);
+    return { shifts, ...ctx };
   }
 
   function logStaffCountAudit(date) {
@@ -2894,13 +2931,8 @@
       .map(pid => allReqs.find(r => String(r.id) === pid))
       .filter(Boolean);
 
-    // ── Hourly staffing counts ──
-    const onLeave = new Set([
-      ...allReqs.filter(r => !isShiftChangeType(r.type) && r.isLeave && !r.isPartial && r.resolvedAction === 'approve').map(r => r.cpc),
-      ...previewReqs.filter(r => !isShiftChangeType(r.type) && r.isLeave && !r.isPartial).map(r => r.cpc),
-    ]);
-    const partialLeaves = getPartialLeaveRequests(allReqs, onLeave);
-    const hourCounts = hourlyStaffCounts(displayShifts, partialLeaves, onLeave);
+    // ── Hourly staffing counts (reflect previewed requests) ──
+    const { hourCounts } = buildHourlyCountContext(date, displayShifts, previewReqs);
 
     const dow = new Date(date + 'T12:00:00').getDay();
     const isWeekday = dow >= 1 && dow <= 5;
