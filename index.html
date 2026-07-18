@@ -970,7 +970,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-07-15a';
+  const BUILD_ID = 'count-2026-07-18a';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1066,6 +1066,7 @@
   }
 
   function shouldShowWxOnShift(shift, shifts, date) {
+    if (date !== localDateStr()) return false;
     const target = wxShiftForName(shift.name, shifts, date);
     return target != null && String(target.id) === String(shift.id);
   }
@@ -1234,10 +1235,9 @@
   function buildByEmployee(shifts) {
     const byEmployee = {};
     shifts.forEach(s => {
-      const rowStart = s._origStart !== undefined ? s._origStart : opsStartOf(s);
-      const isNight  = rowStart >= 20;
-      const hasDay   = shifts.some(o => o.name === s.name && (o._origStart ?? opsStartOf(o)) < 20);
-      const hasNight = shifts.some(o => o.name === s.name && (o._origStart ?? opsStartOf(o)) >= 20);
+      const isNight  = isNightRowShift(s);
+      const hasDay   = shifts.some(o => o.name === s.name && isDayRowShift(o));
+      const hasNight = shifts.some(o => o.name === s.name && isNightRowShift(o));
       const rowKey   = (isNight && hasDay && hasNight) ? s.name + '\u200B' : s.name;
       if (!byEmployee[rowKey]) byEmployee[rowKey] = [];
       byEmployee[rowKey].push(s);
@@ -1276,8 +1276,8 @@
       if (aSpan.start !== bSpan.start) return aSpan.start - bSpan.start;
       return aSpan.end - bSpan.end;
     });
-    const dayRows   = entries.filter(([, shifts]) => shifts.every(s => (s._origStart ?? opsStartOf(s)) < 20));
-    const nightRows = entries.filter(([, shifts]) => shifts.some(s  => (s._origStart ?? opsStartOf(s)) >= 20));
+    const dayRows   = entries.filter(([, shifts]) => shifts.every(s => isDayRowShift(s)));
+    const nightRows = entries.filter(([, shifts]) => shifts.some(s  => isNightRowShift(s)));
     return [...dayRows, ...nightRows];
   }
 
@@ -2659,6 +2659,26 @@
     return os >= 20 || os < 4;
   }
 
+  function rowOpsStart(shift) {
+    return shift._origStart !== undefined ? shift._origStart : opsStartOf(shift);
+  }
+
+  function isNightRowShift(shift) {
+    const os = rowOpsStart(shift);
+    return os >= 20 || os < 4;
+  }
+
+  function isDayRowShift(shift) {
+    const os = rowOpsStart(shift);
+    return os >= 4 && os < 20;
+  }
+
+  function shiftBarLabel(shift) {
+    const os = opsStartOf(shift);
+    const oe = opsEndOf(shift);
+    return `${formatTime(os % 24)}–${formatTime(oe % 24)}`;
+  }
+
   function withOpsTimes(shift, start, end) {
     return { ...shift, opsStart: start, opsEnd: end, start, end };
   }
@@ -3009,8 +3029,8 @@
       const ordered = savedOrder.filter(k => empMap[k]).map(k => [k, empMap[k]]);
       const newRows = defaultOrder.filter(([k]) => !savedOrder.includes(k));
       sortedEmployees = [...ordered, ...newRows];
-      const dayRows   = sortedEmployees.filter(([, shifts]) => shifts.every(s => (s._origStart ?? opsStartOf(s)) < 20));
-      const nightRows = sortedEmployees.filter(([, shifts]) => shifts.some(s  => (s._origStart ?? opsStartOf(s)) >= 20));
+      const dayRows   = sortedEmployees.filter(([, shifts]) => shifts.every(s => isDayRowShift(s)));
+      const nightRows = sortedEmployees.filter(([, shifts]) => shifts.some(s  => isNightRowShift(s)));
       sortedEmployees = [...dayRows, ...nightRows];
     } else {
       sortedEmployees = defaultOrder;
@@ -3048,7 +3068,7 @@
         const width = ((visEnd - visStart) / span) * 100;
         const col = getColor(shift);
         const duration = shift.end - shift.start;
-        const label = `${formatTime(shift.start % 24)}–${formatTime(shift.end % 24)}`;
+        const label = shiftBarLabel(shift);
 
         // Check if a whole-shift leave is being previewed for this person
         const wholeLeavePreview = Array.from(previewReqIds).some(pid => {
@@ -3216,7 +3236,7 @@
 
         const barContent = width > 18
           ? `${gapBeforeStr ? `<span style="${gapBeforeStyle}margin-right:6px;font-size:0.85em;">${gapBeforeStr}</span>` : ''}<span style="font-weight:600;margin-right:6px;">${name}</span><span style="font-weight:500;">${label}</span><span style="opacity:0.85;margin-left:5px;font-size:0.85em;font-weight:500;">${durLabel}</span>${gapAfterStr ? `<span style="${gapAfterStyle}margin-left:6px;font-size:0.85em;">${gapAfterStr}</span>` : ''}`
-          : width > 10
+          : width > 10 || isNightRowShift(shift)
           ? `<span style="font-weight:600;margin-right:5px;">${name}</span><span style="font-weight:500;">${label}</span>`
           : width > 5
           ? `<span style="font-weight:600;">${name}</span>`
