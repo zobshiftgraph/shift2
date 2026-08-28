@@ -138,6 +138,58 @@
       color: #5b9bd5;
       background: rgba(91, 155, 213, 0.08);
     }
+
+    .bookmarklet-box {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .bookmarklet-link {
+      display: block;
+      text-decoration: none;
+      text-align: center;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 600;
+      color: #1a1a1a;
+      background: #fdc83c;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-drag: element;
+    }
+
+    .bookmarklet-link:active { cursor: grabbing; }
+
+    .bookmarklet-link:hover {
+      filter: brightness(1.06);
+      color: #1a1a1a;
+    }
+
+    .bookmarklet-link-pp { background: #7ec8a4; }
+
+    .bookmarklet-help {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.35;
+      margin: 0;
+    }
+
+    .bookmarklet-copy-url {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 11px;
+      color: var(--text-muted);
+      text-decoration: underline;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .bookmarklet-copy-url:hover { color: var(--text); }
+
     .btn-danger {
       background: rgba(217,79,110,0.08);
       color: var(--accent2);
@@ -913,6 +965,25 @@
         </div>
       </div>
     </div>
+    <div style="position:relative;">
+      <button class="btn btn-ghost" onclick="toggleBookmarksMenu()" id="bookmarksToggle">🔖 Bookmarks</button>
+      <div id="bookmarksMenu" style="
+        display:none;position:absolute;right:0;top:calc(100% + 8px);
+        background:var(--surface);border:1px solid var(--border);border-radius:12px;
+        padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,0.12);z-index:100;min-width:300px;
+      ">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:10px;">Drag link to bookmarks bar</div>
+        <p class="bookmarklet-help" style="margin-bottom:10px;">Show the bar first: <strong>Ctrl+Shift+B</strong> (Chrome/Edge). Drag the yellow/green link up — don&apos;t click it here.</p>
+        <div class="bookmarklet-box">
+          <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
+          <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
+          <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
+          <p class="bookmarklet-help">WMT Worksheet View — walks every date in the pay period</p>
+          <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
+          <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
+        </div>
+      </div>
+    </div>
     <button class="btn btn-ghost btn-paste-schedule" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
     <button class="btn btn-ghost btn-paste-wx" onclick="pasteWX()" id="wxBtn">✓ Paste Pre-Duty WX</button>
     <button class="btn btn-ghost" onclick="undoAction()" id="undoBtn" disabled title="Undo">↩ Undo</button>
@@ -970,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-07-18a';
+  const BUILD_ID = 'count-2026-08-28d';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1424,12 +1495,219 @@
   }
 
   function importPayPeriodHTML(text) {
-    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+    if (normalized.includes('===DATE===') && normalized.includes('===SCHEDULE_START===')) {
+      importFromText(text);
+      return;
+    }
     if (normalized.includes('===PAY_PERIOD===')) {
       importPayPeriodCompact(normalized);
       return;
     }
-    try { importPayPeriodDOM(normalized); } catch(e) { alert('Error importing: ' + e.message); }
+    if (isPayPeriodWMTHTML(normalized)) {
+      snapshot('Paste pay period');
+      const tsv = extractPayPeriodTSVFromHTML(normalized);
+      if (!tsv) { alert('Could not find WMT Edit Schedule grid in pasted HTML.'); return; }
+      if (!finishPayPeriodImport(importPayPeriodWMT(tsv), document.getElementById('ppBtn') || document.getElementById('pasteBtn'))) {
+        alert('No shifts found in pay period data.');
+      }
+      return;
+    }
+    if (isPayPeriodWMTData(normalized)) {
+      snapshot('Paste pay period');
+      if (!finishPayPeriodImport(importPayPeriodWMT(normalized), document.getElementById('ppBtn') || document.getElementById('pasteBtn'))) {
+        alert('No shifts found in pay period data.');
+      }
+      return;
+    }
+    alert('Unrecognized pay period format. Use the 📅 Copy Pay Period bookmark on WMT Worksheet View.');
+  }
+
+  function splitTSVRow(line) {
+    return line.split('\t');
+  }
+
+  function parsePayPeriodDateHeader(cell) {
+    if (!cell) return null;
+    const m = String(cell).replace(/\$\$\$\s*/g, '').trim()
+      .match(/(?:\w+\s+)?(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!m) return null;
+    return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  }
+
+  function isPayPeriodPersonRow(label) {
+    return /^[A-Z]{2}\s*-\s*.+/i.test(String(label || '').trim());
+  }
+
+  function extractPayPeriodInitials(label) {
+    const m = String(label).trim().match(/^([A-Z]{2})\s*-/i);
+    return m ? m[1].toUpperCase() : null;
+  }
+
+  function isRepeatedPayPeriodHeader(newDateStrs, existingDateStrs) {
+    if (!existingDateStrs?.length || !newDateStrs?.length) return false;
+    const oldSet = new Set(existingDateStrs);
+    const overlap = newDateStrs.filter(d => oldSet.has(d)).length;
+    return overlap >= Math.min(3, newDateStrs.length);
+  }
+
+  function isPayPeriodWMTData(text) {
+    if (text.includes('===DATE===')) return false;
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    let personRows = 0, dateHeaders = 0;
+    for (const line of lines) {
+      const cols = splitTSVRow(line);
+      if ((cols[0] || '').toUpperCase() === 'NAME' && parsePayPeriodDateHeader(cols[1])) dateHeaders++;
+      if (isPayPeriodPersonRow(cols[0])) personRows++;
+    }
+    return personRows >= 2 && dateHeaders >= 1;
+  }
+
+  function isPayPeriodWMTHTML(text) {
+    return text.includes('tblEditGrid') || text.includes('EditScheduleDetails_');
+  }
+
+  function extractPayPeriodTSVFromHTML(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const grid = doc.getElementById('tblEditGrid');
+    if (!grid) return null;
+    const rows = [];
+    let headerDone = false;
+    grid.querySelectorAll('tr').forEach(tr => {
+      if (tr.querySelector('input[type="submit"],input[id^="submit"]')) return;
+      const tds = tr.querySelectorAll('td');
+      if (!tds.length) return;
+      const label = (tds[0].innerText || tds[0].textContent || '').trim().replace(/\s+/g, ' ');
+      if (!headerDone && (
+        label.toUpperCase() === 'NAME' ||
+        /\d{1,2}\/\d{1,2}\/\d{4}/.test(label) ||
+        /\d{1,2}\/\d{1,2}\/\d{4}/.test((tds[1] && (tds[1].innerText || tds[1].textContent)) || '')
+      )) {
+        const hdr = ['NAME'];
+        for (let i = 1; i < tds.length; i++) {
+          hdr.push((tds[i].innerText || tds[i].textContent || '').trim().replace(/\s+/g, ' '));
+        }
+        if (hdr.length > 2) { rows.push(hdr.join('\t')); headerDone = true; }
+        return;
+      }
+      if (!isPayPeriodPersonRow(label)) return;
+      const cells = [label];
+      tr.querySelectorAll('input[id^="EditScheduleDetails_"]').forEach(inp => {
+        if (/InitialEditScheduleDetails/i.test(inp.name || inp.id || '')) return;
+        cells.push((inp.value || '').trim());
+      });
+      if (cells.length > 1) rows.push(cells.join('\t'));
+    });
+    return rows.length > 1 ? rows.join('\n') : null;
+  }
+
+  function addPayPeriodShift(initials, rawCode, dateStr) {
+    if (!rawCode || !initials) return false;
+
+    let isCICShift = false;
+    let isDevShift = false;
+    let code = rawCode.trim();
+
+    if (/^A<.+>$/i.test(code)) return false;
+
+    const prefixMatch = code.match(/^(@D|@T|@|C|T|D)(.+)$/i);
+    if (prefixMatch) {
+      const prefix = prefixMatch[1].toUpperCase();
+      code = prefixMatch[2];
+      if (prefix === 'C') isCICShift = true;
+      if (prefix === 'T') isDevShift = true;
+      if (prefix === 'D' || prefix === '@D') return false;
+    }
+
+    code = code.replace(/[\$\^\!]$/, '');
+    const info = parseShiftCode(code);
+    if (!info) return false;
+
+    let targetDate = dateStr;
+    if (info.start >= 20 || info.start < 4) {
+      const prev = new Date(dateStr + 'T12:00:00');
+      prev.setDate(prev.getDate() - 1);
+      targetDate = localDateStr(prev);
+    }
+    const prepared = prepareImportedShift(withOpsTimes({ start: info.start, end: info.end }, info.start, info.end));
+
+    if (!schedulesByDate[targetDate]) schedulesByDate[targetDate] = [];
+
+    const exists = schedulesByDate[targetDate].some(s => s.name === initials);
+    if (exists) return false;
+
+    schedulesByDate[targetDate].push({
+      id: Date.now() + Math.random(),
+      name: initials,
+      opsStart: info.start,
+      opsEnd: info.end,
+      start: prepared.start,
+      end: prepared.end,
+      cic: isCICShift,
+      dev: isDevShift,
+      role: 'Pay Period Import'
+    });
+    return true;
+  }
+
+  function importPayPeriodWMT(text) {
+    const lines = text.split('\n').map(l => l.replace(/\r/g, '')).filter(l => l.trim());
+    let currentDates = [];
+    let totalImported = 0;
+
+    for (const line of lines) {
+      const cols = splitTSVRow(line);
+      if (!cols.length) continue;
+      const label = (cols[0] || '').trim();
+
+      if (label.toUpperCase() === 'NAME' || (!label && parsePayPeriodDateHeader(cols[1]))) {
+        const startIdx = label.toUpperCase() === 'NAME' ? 1 : 0;
+        const parsedDates = [];
+        for (let i = startIdx; i < cols.length; i++) {
+          const dk = parsePayPeriodDateHeader(cols[i]);
+          if (dk) parsedDates.push(dk);
+        }
+        if (parsedDates.length >= 3 && !isRepeatedPayPeriodHeader(parsedDates, currentDates)) {
+          currentDates = parsedDates;
+        }
+        continue;
+      }
+
+      if (parsePayPeriodDateHeader(label) && cols.length > 2) continue;
+      if (!isPayPeriodPersonRow(label)) continue;
+
+      const initials = extractPayPeriodInitials(label);
+      if (!initials || !currentDates.length) continue;
+
+      for (let d = 0; d < currentDates.length && d + 1 < cols.length; d++) {
+        const cell = (cols[d + 1] || '').trim();
+        if (!cell) continue;
+        if (addPayPeriodShift(initials, cell, currentDates[d])) totalImported++;
+      }
+    }
+
+    return totalImported;
+  }
+
+  function finishPayPeriodImport(totalImported, btn, preferredDate, dayCount) {
+    if (!totalImported) return false;
+
+    const today = localDateStr();
+    const dateFilter = document.getElementById('dateFilter');
+    if (dateFilter) dateFilter.value = preferredDate || today;
+
+    render();
+    renderRequests();
+
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = dayCount > 1
+        ? `✓ ${dayCount} days loaded`
+        : `✓ ${totalImported} shifts loaded`;
+      btn.style.color = 'var(--accent3)';
+      setTimeout(() => { btn.textContent = '📋 Paste Schedule'; btn.style.color = ''; }, 3000);
+    }
+    return true;
   }
 
   function importPayPeriodCompact(text) {
@@ -1441,14 +1719,12 @@
     snapshot('Paste pay period');
 
     const dateStrs = lines[ppIdx + 1].split(',');
-    // Convert MM/DD/YYYY to YYYY-MM-DD
     const dates = dateStrs.map(d => {
       const [m, day, y] = d.trim().split('/');
-      return `${y}-${m.padStart(2,'0')}-${day.padStart(2,'0')}`;
+      return `${y}-${m.padStart(2, '0')}-${day.padStart(2, '0')}`;
     });
 
     let totalImported = 0;
-
     const employeeLines = lines.slice(schIdx + 1);
 
     for (const line of employeeLines) {
@@ -1458,80 +1734,159 @@
       const shifts = line.slice(pipeIdx + 1).split(',');
 
       for (let d = 0; d < shifts.length && d < dates.length; d++) {
-        let rawCode = shifts[d].trim();
+        const rawCode = shifts[d].trim();
         if (!rawCode) continue;
-
-        let isCICShift = false;
-        let isDevShift = false;
-
-        if (/^A<.+>$/.test(rawCode)) continue;
-
-        const prefixMatch = rawCode.match(/^(@D|@T|@|C|T|D)(.+)$/i);
-        if (prefixMatch) {
-          const prefix = prefixMatch[1].toUpperCase();
-          rawCode = prefixMatch[2];
-          if (prefix === 'C') isCICShift = true;
-          if (prefix === 'T') isDevShift = true;
-          if (prefix === 'D' || prefix === '@D') continue;
-        }
-
-        rawCode = rawCode.replace(/[\$\^\!]$/, '');
-        const info = parseShiftCode(rawCode);
-        if (!info) continue;
-
-        let targetDate = dates[d];
-        const isOvernight = info.start >= 20 || info.start < 4;
-        if (isOvernight) {
-          const prev = new Date(dates[d] + 'T12:00:00');
-          prev.setDate(prev.getDate() - 1);
-          targetDate = localDateStr(prev);
-        }
-        const prepared = prepareImportedShift(withOpsTimes({ start: info.start, end: info.end }, info.start, info.end));
-
-        if (!schedulesByDate[targetDate]) schedulesByDate[targetDate] = [];
-
-        const exists = schedulesByDate[targetDate].some(s => s.name === initials);
-        if (!exists) {
-          schedulesByDate[targetDate].push({
-            id: Date.now() + Math.random(),
-            name: initials,
-            opsStart: info.start,
-            opsEnd: info.end,
-            start: prepared.start,
-            end: prepared.end,
-            cic: isCICShift,
-            dev: isDevShift,
-            role: 'Pay Period Import'
-          });
-          totalImported++;
-        }
+        if (addPayPeriodShift(initials, rawCode, dates[d])) totalImported++;
       }
     }
 
-    if (!totalImported) { alert('No shifts found in pay period data.'); return; }
-
-    const today = localDateStr();
-    const dateFilter = document.getElementById('dateFilter');
-    if (dateFilter) dateFilter.value = today;
-
-    render();
-    renderRequests();
-
-    const btn = document.getElementById('ppBtn');
-    if (btn) {
-      const orig = btn.textContent;
-      btn.textContent = `✓ ${totalImported} shifts loaded`;
-      btn.style.color = 'var(--accent3)';
-      setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 3000);
+    if (!finishPayPeriodImport(totalImported, document.getElementById('ppBtn') || document.getElementById('pasteBtn'))) {
+      alert('No shifts found in pay period data.');
     }
   }
 
-  function copyBookmarklet() {
-    const code = `(function(){try{var L={'2030-10':[20,30,30,30],'0500-9':[5,0,14,0],'1200-9':[12,0,21,0],'1400-9':[14,0,23,0],'1600':[16,0,24,0],'0000':[0,0,32,0],'2230':[22,30,30,30],'0600':[6,0,14,0],'0600-10':[6,0,16,0],'0600-9':[6,0,15,0],'0700':[7,0,15,0],'0700-10':[7,0,17,0],'0700-9':[7,0,16,0],'0800':[8,0,16,0],'1100-10':[11,0,21,0],'1200-10':[12,0,22,0],'1300':[13,0,21,0],'1300-10':[13,0,23,0],'1400':[14,0,22,0],'1500':[15,0,23,0],'0900':[9,0,17,0],'0700F':[7,0,15,0],'0800-10':[8,0,18,0],'0800-9':[8,0,17,0],'0000F':[0,0,32,0],'2230F':[22,30,30,30],'0530-7':[5,30,12,30],'0600F':[6,0,14,0],'0800F':[8,0,16,0],'1000-7':[10,0,17,0],'1200':[12,0,20,0],'1300-7':[13,0,20,0],'1300-9':[13,0,22,0],'1300F':[13,0,21,0],'1400F':[14,0,22,0],'1500F':[15,0,23,0],'1600F':[16,0,24,0],'1430':[14,30,22,30],'0730':[7,30,15,30],'0830':[8,30,16,30],'0900-10':[9,0,19,0],'1000':[10,0,18,0],'1100-9':[11,0,20,0],'1400-7':[14,0,21,0],'0600-7':[6,0,13,0],'0700-7':[7,0,14,0],'1400-10':[14,0,24,0],'0800-7':[8,0,15,0],'1500-9':[15,0,24,0],'2300F':[23,0,31,0],'2300':[23,0,31,0],'0630':[6,30,14,30],'2200-9':[22,0,31,0],'2300-9':[23,0,32,0],'0900-7':[9,0,16,0],'1600-7':[16,0,23,0],'1700-9':[17,0,26,0],'2200-10':[22,0,32,0],'0900-9':[9,0,17,0],'1200-7':[12,0,19,0],'2230-9':[22,30,31,30],'0730-7':[7,30,14,30],'1500-7':[15,0,22,0],'1000-10':[10,0,20,0],'1000-9':[10,0,19,0],'1100':[11,0,19,0],'1330':[13,30,21,30],'0630-7':[6,30,13,30],'2230-7':[22,30,29,30],'1100-7':[11,0,18,0],'1700-7':[17,0,24,0],'1615':[16,15,24,15],'1615-7':[16,15,23,15],'1700':[17,0,25,0],'2130':[21,30,29,30],'0530':[5,30,13,30],'1100F':[11,0,19,0],'2200':[22,0,30,0],'2100-10':[21,0,31,0],'0630-9':[6,30,15,30],'1200F':[12,0,20,0],'0500-10':[5,0,15,0],'0530-9':[5,30,14,30],'0530-10':[5,30,15,30],'1130':[11,30,19,30],'1530':[15,30,23,30],'2330-7':[23,30,30,30],'2130-9':[21,30,30,30],'1600-9':[16,0,25,0],'2300-7':[23,0,30,0],'1215-10':[12,15,22,15],'0000-7':[0,0,31,0],'1430-7':[14,30,21,30],'0600-10F':[6,0,16,0],'0900-10F':[9,0,19,0],'0400':[4,0,12,0],'1200-10F':[12,0,22,0],'0900F':[9,0,17,0],'2230-10':[22,30,32,30],'0930-7':[9,30,16,30],'0930':[9,30,17,30],'0630-10':[6,30,16,30],'1330-10':[13,30,23,30],'1300-10F':[13,0,23,0],'0000-9':[0,0,33,0],'0800-10F':[8,0,18,0],'1100-10F':[11,0,21,0],'0430-10':[4,30,14,30],'1330-9':[13,30,22,30],'0700-10F':[7,0,17,0],'1130-10':[11,30,21,30],'1430-9':[14,30,23,30],'0600-7F':[6,0,13,0],'1630':[16,30,24,30],'2345':[23,45,31,45],'0930-10':[9,30,19,30],'2100-10F':[21,0,31,0],'0545-6':[5,45,11,45],'0830-10':[8,30,18,30],'2345F':[23,45,31,45],'1400-10F':[14,0,24,0],'0500-6':[5,0,11,0],'2245':[22,45,30,45],'2245-9':[22,45,31,45],'2245F':[22,45,30,45],'0545-7':[5,45,12,45],'0700ADMIN':[7,0,15,30],'0500':[5,0,13,0],'0545':[5,45,13,45],'2100':[21,0,29,0]};function shiftEndTime(code){var c=code.toUpperCase().replace(/^(@D|@T|@|C|T|D)/,'').replace(/(TMC|OM)[\$\^!]?$/,'').replace(/[\$\^!]$/,'').replace(/^AREA/,'').trim();if(L[c]){return L[c];}var nf=c.replace(/F$/,'');if(L[nf]){return L[nf];}return null;}var dateEl=document.getElementById('lblSelectedDate');if(!dateEl){alert('Not on WMT Worksheet View page.');return;}var dateText=dateEl.textContent.trim();var out='===DATE===\\n'+dateText+'\\n===SCHEDULE_START===\\n';var shiftTable=document.getElementById('ScheduledShifts');if(!shiftTable){alert('Could not find ScheduledShifts table.');return;}var rows=shiftTable.querySelectorAll('tr');for(var i=1;i<rows.length;i++){var tds=rows[i].querySelectorAll('td');if(tds.length<3)continue;var rawCode=tds[0].textContent.trim();if(!rawCode)continue;var names=[];var supLinks=tds[1].querySelectorAll('a');for(var s=0;s<supLinks.length;s++){var st=supLinks[s].textContent.trim().replace(/\\s+/g,'');if(st)names.push('('+st+')');}var cpcLinks=tds[2].querySelectorAll('a');for(var c=0;c<cpcLinks.length;c++){var ct=cpcLinks[c].textContent.trim().replace(/\\s+/g,'');if(ct)names.push(ct);}if(tds.length>3){var devLinks=tds[3].querySelectorAll('a');for(var d=0;d<devLinks.length;d++){var dt=devLinks[d].textContent.trim().replace(/\\s+/g,'');if(dt)names.push('<'+dt+'>');}}if(names.length>0)out+=rawCode+'\\n'+names.join(' ')+'\\n';}out+='===REQUESTS_START===\\n';out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';function parseReqTable(tblId){var tbl=document.getElementById(tblId);if(!tbl)return;var rs=tbl.querySelectorAll('tr');for(var i=1;i<rs.length;i++){var tds=rs[i].querySelectorAll('td');if(tds.length<6)continue;out+=tds[0].textContent.trim()+'\\t'+tds[1].textContent.trim()+'\\t'+tds[2].textContent.trim()+'\\t'+tds[3].textContent.trim()+'\\t'+tds[4].textContent.trim()+'\\t'+tds[5].textContent.trim()+'\\t'+(tds.length>6?tds[6].textContent.trim():'')+'\\t'+(tds.length>7?tds[7].textContent.trim():'')+'\\n';}}parseReqTable('tblShiftChange');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblXTECTE');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblSupRequests');navigator.clipboard.writeText(out).then(function(){},function(){alert('Clipboard access denied.');});}catch(e){alert('Bookmarklet error: '+e.message);}})();`;
+  function getPayPeriodBookmarkletCode() {
+    return `(async function(){
+      var INDEX_RE=/\\/Views\\/WorksheetView\\/Index\\/(\\d+)/i;
+      function showToast(msg,err){
+        var el=document.getElementById('sg-copy-toast');
+        if(!el){
+          el=document.createElement('div');
+          el.id='sg-copy-toast';
+          el.style.cssText='position:fixed;top:16px;right:16px;z-index:2147483647;padding:10px 16px;border-radius:6px;font:600 14px/1.3 system-ui,sans-serif;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35);transition:opacity .3s;pointer-events:none';
+          document.body.appendChild(el);
+        }
+        el.style.background=err?'#dc2626':'#16a34a';
+        el.textContent=msg;
+        el.style.opacity='1';
+        clearTimeout(el._t);
+        el._t=setTimeout(function(){el.style.opacity='0';},err?3500:2500);
+      }
+      function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+      function currentDayNum(){
+        var m=location.pathname.match(INDEX_RE);
+        return m?Number(m[1]):null;
+      }
+      function indexHref(dayNum){
+        var m=location.pathname.match(/^(.*\\/Views\\/WorksheetView\\/Index)(?:\\/\\d+)?\\/?$/i);
+        return location.origin+(m?m[1]+'/'+dayNum:'/Views/WorksheetView/Index/'+dayNum);
+      }
+      function collectDays(){
+        var days=[],seen={};
+        var strip=document.getElementById('WorksheetViewDayStrip')||document;
+        var links=strip.querySelectorAll('a[href]');
+        for(var i=0;i<links.length;i++){
+          var a=links[i],raw=a.getAttribute('href')||'';
+          if(raw.indexOf('#')!==-1||/help\\/detail/i.test(raw)) continue;
+          var m=(raw||a.href||'').match(INDEX_RE);
+          if(!m) continue;
+          var dayNum=Number(m[1]);
+          if(seen[dayNum]) continue;
+          seen[dayNum]=true;
+          var td=a.closest('td');
+          days.push({dayNum:dayNum,href:a.href||indexHref(dayNum),label:((td&&td.textContent)||a.textContent||'').replace(/\\s+/g,' ').trim()});
+        }
+        days.sort(function(a,b){return a.dayNum-b.dayNum;});
+        if(!days.length){
+          var n=currentDayNum();
+          if(n){for(var d=1;d<=14;d++) days.push({dayNum:d,href:indexHref(d),label:'Day '+d});}
+        }
+        return days;
+      }
+      function extractDayText(doc){
+        var dateEl=doc.getElementById('lblSelectedDate');
+        if(!dateEl) return null;
+        var out='===DATE===\\n'+dateEl.textContent.trim()+'\\n===SCHEDULE_START===\\n';
+        var shiftTable=doc.getElementById('ScheduledShifts');
+        if(!shiftTable) return null;
+        var rows=shiftTable.querySelectorAll('tr');
+        for(var i=1;i<rows.length;i++){
+          var tds=rows[i].querySelectorAll('td');
+          if(tds.length<3) continue;
+          var rawCode=tds[0].textContent.trim();
+          if(!rawCode) continue;
+          var names=[];
+          tds[1].querySelectorAll('a').forEach(function(a){var t=a.textContent.trim().replace(/\\s+/g,'');if(t)names.push('('+t+')');});
+          tds[2].querySelectorAll('a').forEach(function(a){var t=a.textContent.trim().replace(/\\s+/g,'');if(t)names.push(t);});
+          if(tds.length>3){tds[3].querySelectorAll('a').forEach(function(a){var t=a.textContent.trim().replace(/\\s+/g,'');if(t)names.push('<'+t+'>');});}
+          if(names.length) out+=rawCode+'\\n'+names.join(' ')+'\\n';
+        }
+        out+='===REQUESTS_START===\\n';
+        out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';
+        function parseReqTable(tblId){
+          var tbl=doc.getElementById(tblId);
+          if(!tbl) return;
+          var rs=tbl.querySelectorAll('tr');
+          for(var j=1;j<rs.length;j++){
+            var rtds=rs[j].querySelectorAll('td');
+            if(rtds.length<6) continue;
+            out+=rtds[0].textContent.trim()+'\\t'+rtds[1].textContent.trim()+'\\t'+rtds[2].textContent.trim()+'\\t'+rtds[3].textContent.trim()+'\\t'+rtds[4].textContent.trim()+'\\t'+rtds[5].textContent.trim()+'\\t'+(rtds.length>6?rtds[6].textContent.trim():'')+'\\t'+(rtds.length>7?rtds[7].textContent.trim():'')+'\\n';
+          }
+        }
+        parseReqTable('tblShiftChange');
+        out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';
+        parseReqTable('tblXTECTE');
+        out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';
+        parseReqTable('tblSupRequests');
+        return out;
+      }
+      async function fetchDay(day,liveNum){
+        if(liveNum&&day.dayNum===liveNum) return extractDayText(document);
+        var url=day.href||indexHref(day.dayNum);
+        var res=await fetch(url,{credentials:'same-origin'});
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        return extractDayText(new DOMParser().parseFromString(await res.text(),'text/html'));
+      }
+      if(document.getElementById('tblEditGrid')&&!document.getElementById('lblSelectedDate')){
+        showToast('Open Worksheet View, not Edit Schedule',1);return;
+      }
+      if(!document.getElementById('lblSelectedDate')&&!document.getElementById('WorksheetViewDayStrip')){
+        showToast('Open WMT Worksheet View first',1);return;
+      }
+      var days=collectDays();
+      if(!days.length){showToast('No pay-period dates found',1);return;}
+      var parts=[],live=currentDayNum();
+      for(var i=0;i<days.length;i++){
+        showToast('Copying day '+(i+1)+' of '+days.length+'…');
+        try{
+          var text=await fetchDay(days[i],live);
+          if(text) parts.push(text);
+        }catch(e){}
+        if(i<days.length-1) await sleep(250);
+      }
+      if(!parts.length){showToast('No worksheet data copied',1);return;}
+      try{
+        await navigator.clipboard.writeText(parts.join('\\n'));
+        showToast('Copied '+parts.length+' days — paste in Shift Graph');
+      }catch(e){showToast('Copy failed',1);}
+    })();`;
+  }
 
+  function getDayBookmarkletCode() {
+    return `(function(){try{var L={'2030-10':[20,30,30,30],'0500-9':[5,0,14,0],'1200-9':[12,0,21,0],'1400-9':[14,0,23,0],'1600':[16,0,24,0],'0000':[0,0,32,0],'2230':[22,30,30,30],'0600':[6,0,14,0],'0600-10':[6,0,16,0],'0600-9':[6,0,15,0],'0700':[7,0,15,0],'0700-10':[7,0,17,0],'0700-9':[7,0,16,0],'0800':[8,0,16,0],'1100-10':[11,0,21,0],'1200-10':[12,0,22,0],'1300':[13,0,21,0],'1300-10':[13,0,23,0],'1400':[14,0,22,0],'1500':[15,0,23,0],'0900':[9,0,17,0],'0700F':[7,0,15,0],'0800-10':[8,0,18,0],'0800-9':[8,0,17,0],'0000F':[0,0,32,0],'2230F':[22,30,30,30],'0530-7':[5,30,12,30],'0600F':[6,0,14,0],'0800F':[8,0,16,0],'1000-7':[10,0,17,0],'1200':[12,0,20,0],'1300-7':[13,0,20,0],'1300-9':[13,0,22,0],'1300F':[13,0,21,0],'1400F':[14,0,22,0],'1500F':[15,0,23,0],'1600F':[16,0,24,0],'1430':[14,30,22,30],'0730':[7,30,15,30],'0830':[8,30,16,30],'0900-10':[9,0,19,0],'1000':[10,0,18,0],'1100-9':[11,0,20,0],'1400-7':[14,0,21,0],'0600-7':[6,0,13,0],'0700-7':[7,0,14,0],'1400-10':[14,0,24,0],'0800-7':[8,0,15,0],'1500-9':[15,0,24,0],'2300F':[23,0,31,0],'2300':[23,0,31,0],'0630':[6,30,14,30],'2200-9':[22,0,31,0],'2300-9':[23,0,32,0],'0900-7':[9,0,16,0],'1600-7':[16,0,23,0],'1700-9':[17,0,26,0],'2200-10':[22,0,32,0],'0900-9':[9,0,17,0],'1200-7':[12,0,19,0],'2230-9':[22,30,31,30],'0730-7':[7,30,14,30],'1500-7':[15,0,22,0],'1000-10':[10,0,20,0],'1000-9':[10,0,19,0],'1100':[11,0,19,0],'1330':[13,30,21,30],'0630-7':[6,30,13,30],'2230-7':[22,30,29,30],'1100-7':[11,0,18,0],'1700-7':[17,0,24,0],'1615':[16,15,24,15],'1615-7':[16,15,23,15],'1700':[17,0,25,0],'2130':[21,30,29,30],'0530':[5,30,13,30],'1100F':[11,0,19,0],'2200':[22,0,30,0],'2100-10':[21,0,31,0],'0630-9':[6,30,15,30],'1200F':[12,0,20,0],'0500-10':[5,0,15,0],'0530-9':[5,30,14,30],'0530-10':[5,30,15,30],'1130':[11,30,19,30],'1530':[15,30,23,30],'2330-7':[23,30,30,30],'2130-9':[21,30,30,30],'1600-9':[16,0,25,0],'2300-7':[23,0,30,0],'1215-10':[12,15,22,15],'0000-7':[0,0,31,0],'1430-7':[14,30,21,30],'0600-10F':[6,0,16,0],'0900-10F':[9,0,19,0],'0400':[4,0,12,0],'1200-10F':[12,0,22,0],'0900F':[9,0,17,0],'2230-10':[22,30,32,30],'0930-7':[9,30,16,30],'0930':[9,30,17,30],'0630-10':[6,30,16,30],'1330-10':[13,30,23,30],'1300-10F':[13,0,23,0],'0000-9':[0,0,33,0],'0800-10F':[8,0,18,0],'1100-10F':[11,0,21,0],'0430-10':[4,30,14,30],'1330-9':[13,30,22,30],'0700-10F':[7,0,17,0],'1130-10':[11,30,21,30],'1430-9':[14,30,23,30],'0600-7F':[6,0,13,0],'1630':[16,30,24,30],'2345':[23,45,31,45],'0930-10':[9,30,19,30],'2100-10F':[21,0,31,0],'0545-6':[5,45,11,45],'0830-10':[8,30,18,30],'2345F':[23,45,31,45],'1400-10F':[14,0,24,0],'0500-6':[5,0,11,0],'2245':[22,45,30,45],'2245-9':[22,45,31,45],'2245F':[22,45,30,45],'0545-7':[5,45,12,45],'0700ADMIN':[7,0,15,30],'0500':[5,0,13,0],'0545':[5,45,13,45],'2100':[21,0,29,0]};function shiftEndTime(code){var c=code.toUpperCase().replace(/^(@D|@T|@|C|T|D)/,'').replace(/(TMC|OM)[\$\^!]?$/,'').replace(/[\$\^!]$/,'').replace(/^AREA/,'').trim();if(L[c]){return L[c];}var nf=c.replace(/F$/,'');if(L[nf]){return L[nf];}return null;}var dateEl=document.getElementById('lblSelectedDate');if(!dateEl){alert('Not on WMT Worksheet View page.');return;}var dateText=dateEl.textContent.trim();var out='===DATE===\\n'+dateText+'\\n===SCHEDULE_START===\\n';var shiftTable=document.getElementById('ScheduledShifts');if(!shiftTable){alert('Could not find ScheduledShifts table.');return;}var rows=shiftTable.querySelectorAll('tr');for(var i=1;i<rows.length;i++){var tds=rows[i].querySelectorAll('td');if(tds.length<3)continue;var rawCode=tds[0].textContent.trim();if(!rawCode)continue;var names=[];var supLinks=tds[1].querySelectorAll('a');for(var s=0;s<supLinks.length;s++){var st=supLinks[s].textContent.trim().replace(/\\s+/g,'');if(st)names.push('('+st+')');}var cpcLinks=tds[2].querySelectorAll('a');for(var c=0;c<cpcLinks.length;c++){var ct=cpcLinks[c].textContent.trim().replace(/\\s+/g,'');if(ct)names.push(ct);}if(tds.length>3){var devLinks=tds[3].querySelectorAll('a');for(var d=0;d<devLinks.length;d++){var dt=devLinks[d].textContent.trim().replace(/\\s+/g,'');if(dt)names.push('<'+dt+'>');}}if(names.length>0)out+=rawCode+'\\n'+names.join(' ')+'\\n';}out+='===REQUESTS_START===\\n';out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';function parseReqTable(tblId){var tbl=document.getElementById(tblId);if(!tbl)return;var rs=tbl.querySelectorAll('tr');for(var i=1;i<rs.length;i++){var tds=rs[i].querySelectorAll('td');if(tds.length<6)continue;out+=tds[0].textContent.trim()+'\\t'+tds[1].textContent.trim()+'\\t'+tds[2].textContent.trim()+'\\t'+tds[3].textContent.trim()+'\\t'+tds[4].textContent.trim()+'\\t'+tds[5].textContent.trim()+'\\t'+(tds.length>6?tds[6].textContent.trim():'')+'\\t'+(tds.length>7?tds[7].textContent.trim():'')+'\\n';}}parseReqTable('tblShiftChange');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblXTECTE');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblSupRequests');navigator.clipboard.writeText(out).then(function(){},function(){alert('Clipboard access denied.');});}catch(e){alert('Bookmarklet error: '+e.message);}})();`;
+  }
+
+  function initBookmarkletLinks() {
+    const bm = document.getElementById('bmBtn');
+    const pp = document.getElementById('ppBtn');
+    if (bm) bm.href = 'javascript:' + encodeURIComponent(getDayBookmarkletCode());
+    if (pp) pp.href = 'javascript:' + encodeURIComponent(getPayPeriodBookmarkletCode());
+    [bm, pp].forEach(link => {
+      if (!link) return;
+      link.addEventListener('mousedown', e => e.stopPropagation());
+      link.addEventListener('dragstart', e => e.stopPropagation());
+      link.addEventListener('click', e => e.preventDefault());
+    });
+  }
+
+  function copyBookmarkletUrl(which) {
+    const link = document.getElementById(which === 'pp' ? 'ppBtn' : 'bmBtn');
+    const code = which === 'pp' ? getPayPeriodBookmarkletCode() : getDayBookmarkletCode();
     const bookmarkletUrl = 'javascript:' + encodeURIComponent(code);
-    const btn = document.getElementById('bmBtn');
+    copyBookmarkletToClipboard(bookmarkletUrl, link, link?.textContent?.trim() || 'Bookmark');
+  }
 
+  function copyBookmarkletToClipboard(bookmarkletUrl, btn, defaultLabel) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(bookmarkletUrl).then(() => {
         const orig = btn.textContent;
@@ -1542,6 +1897,11 @@
     } else {
       showBookmarkletDialog(bookmarkletUrl);
     }
+  }
+
+  function toggleBookmarksMenu() {
+    const menu = document.getElementById('bookmarksMenu');
+    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
   }
 
   function showBookmarkletDialog(url) {
@@ -1587,35 +1947,40 @@
   document.addEventListener('click', function(e) {
     const dd = document.getElementById('addShiftDropdown');
     const btn = document.getElementById('addShiftToggle');
-    if (dd.style.display === 'block' && !dd.contains(e.target) && !btn.contains(e.target)) {
+    if (dd && btn && dd.style.display === 'block' && !dd.contains(e.target) && !btn.contains(e.target)) {
       dd.style.display = 'none';
+    }
+    const bmMenu = document.getElementById('bookmarksMenu');
+    const bmToggle = document.getElementById('bookmarksToggle');
+    if (bmMenu && bmToggle && bmMenu.style.display === 'block' && !bmMenu.contains(e.target) && !bmToggle.contains(e.target)) {
+      bmMenu.style.display = 'none';
     }
   });
 
   // ── Paste Schedule from clipboard ──
   async function pasteSchedule() {
     const btn = document.getElementById('pasteBtn');
+    if (!btn) return;
 
-    // Try clipboard API first (works on https:// or localhost)
-    if (navigator.clipboard && navigator.clipboard.readText) {
+    btn.textContent = '⏳ Reading…';
+    btn.disabled = true;
+
+    if (navigator.clipboard?.readText) {
       try {
-        btn.textContent = '⏳ Reading…';
-        btn.disabled = true;
         const text = await navigator.clipboard.readText();
-        if (!text.trim()) {
-          showPasteFeedback(btn, '⚠ Clipboard is empty', true);
+        if (text.trim()) {
+          importFromText(text);
           return;
         }
-        importFromText(text);
+        showPasteFeedback(btn, '⚠ Clipboard is empty', true);
         return;
       } catch (err) {
-        // Fall through to manual paste dialog
-        btn.textContent = '📋 Paste Schedule';
-        btn.disabled = false;
+        // Clipboard blocked (e.g. file://) — fall through to manual paste dialog
       }
     }
 
-    // Fallback: show a textarea dialog for manual paste (works on file://)
+    btn.textContent = '📋 Paste Schedule';
+    btn.disabled = false;
     showPasteDialog();
   }
 
@@ -1636,7 +2001,7 @@
       " onclick="event.stopPropagation()">
         <div style="font-size:16px;font-weight:700;margin-bottom:6px;">Paste Schedule Data</div>
         <div style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono);margin-bottom:14px;">
-          Press Ctrl+V to paste your bookmarklet data — it will import automatically.
+          Clipboard access was blocked — press <strong>Ctrl+V</strong> to paste one day or a full pay period from WMT Worksheet View.
         </div>
         <textarea id="pasteDialogTA" style="
           width:100%;height:60px;
@@ -1846,10 +2211,22 @@
     return token.replace(/^\[+|\]+$|^\(+|\)+$|^<|>$/g, '').replace(/[\$\^\!]$/, '');
   }
 
-  function importFromText(raw) {
-    const btn = document.getElementById('pasteBtn');
+  function countWorksheetDays(text) {
+    return (text.match(/===DATE===/g) || []).length;
+  }
 
-    // Extract date
+  function isWorksheetScheduleData(text) {
+    return text.includes('===DATE===') && text.includes('===SCHEDULE_START===');
+  }
+
+  function splitWorksheetDays(raw) {
+    return raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      .split(/(?====DATE===)/)
+      .map(s => s.trim())
+      .filter(s => s.startsWith('===DATE==='));
+  }
+
+  function importSingleDayBlock(raw) {
     let importedDate = null;
     const dateMatch = raw.match(/===DATE===\s*\n([^\n]+)/);
     if (dateMatch) {
@@ -1857,13 +2234,10 @@
       if (!isNaN(d)) importedDate = localDateStr(d);
     }
 
-    // Extract schedule section
     const schedStart = raw.indexOf('===SCHEDULE_START===');
     const schedEnd = raw.indexOf('===REQUESTS_START===');
-    if (schedStart === -1) {
-      showPasteFeedback(btn, '⚠ No schedule marker found', true);
-      return;
-    }
+    if (schedStart === -1) return { shifts: 0, date: importedDate };
+
     const schedSection = raw.slice(
       schedStart + '===SCHEDULE_START==='.length,
       schedEnd === -1 ? undefined : schedEnd
@@ -1900,12 +2274,7 @@
       i++;
     }
 
-    if (parsed.length === 0) {
-      showPasteFeedback(btn, '⚠ No valid shifts found', true);
-      return;
-    }
-
-    snapshot('Paste schedule');
+    if (parsed.length === 0) return { shifts: 0, date: importedDate };
 
     const targetDate = importedDate || localDateStr();
     const targetDateObj = new Date(targetDate + 'T12:00:00');
@@ -1920,33 +2289,126 @@
       .filter(s => isOvernightOpsShift(s))
       .map(s => prepareImportedShift(s));
 
-    // Keep any existing overnight shifts on this date, replace day shifts
     const existingNightShifts = (schedulesByDate[targetDate] || []).filter(s => isOvernightOpsShift(s));
     if (currentDayShifts.length > 0) schedulesByDate[targetDate] = [...existingNightShifts, ...currentDayShifts];
     if (prevDayShifts.length > 0) {
       if (!schedulesByDate[prevDate]) schedulesByDate[prevDate] = [];
       const dayOnly = schedulesByDate[prevDate].filter(s => isDayOpsShift(s));
-      // Replace overnight rows on the previous day; dedupe by name so re-imports stay clean
       const overnightByName = new Map();
       prevDayShifts.forEach(s => overnightByName.set(s.name, s));
       schedulesByDate[prevDate] = [...dayOnly, ...overnightByName.values()];
     }
 
     importRawByDate[targetDate] = raw;
-    document.getElementById('dateFilter').value = targetDate;
-    VIEW_START = 4; VIEW_END = 26;
 
-    // Parse requests + apply approved TOS to shift bars
     const { requests: parsedReqs, tosToApply } = parseRequests(raw, targetDate);
     requestsByDate[targetDate] = mergeRequestsWithResolved(targetDate, parsedReqs);
     tosToApply.forEach(t => applyTosToShift(targetDate, t.cpc, t.from, t.to, t.type));
-    sanitizeRequests();
 
+    return { shifts: parsed.length, date: targetDate };
+  }
+
+  function importWorksheetPayPeriod(raw) {
+    const blocks = splitWorksheetDays(raw);
+    let totalImported = 0;
+    let firstDate = null;
+    for (const block of blocks) {
+      const result = importSingleDayBlock(block);
+      if (result.shifts > 0) {
+        totalImported += result.shifts;
+        if (result.date && !firstDate) firstDate = result.date;
+      }
+    }
+    sanitizeRequests();
+    VIEW_START = 4;
+    VIEW_END = 26;
+    return { totalImported, firstDate, dayCount: blocks.length };
+  }
+
+  function importWorksheetSchedule(raw, btn) {
+    const blocks = splitWorksheetDays(raw);
+    if (!blocks.length) {
+      showPasteFeedback(btn, '⚠ No worksheet days found', true);
+      return;
+    }
+
+    if (blocks.length === 1) {
+      const result = importSingleDayBlock(blocks[0]);
+      if (result.shifts === 0) {
+        showPasteFeedback(btn, '⚠ No valid shifts found', true);
+        return;
+      }
+      snapshot('Paste schedule');
+      sanitizeRequests();
+      if (result.date) document.getElementById('dateFilter').value = result.date;
+      VIEW_START = 4;
+      VIEW_END = 26;
+      render();
+      renderRequests();
+      if (result.date) logStaffCountAudit(result.date);
+      showPasteFeedback(btn, '✓ 1 day loaded', false);
+      return;
+    }
+
+    snapshot('Paste pay period');
+    const { totalImported, firstDate, dayCount } = importWorksheetPayPeriod(raw);
+    if (!finishPayPeriodImport(totalImported, btn, firstDate, dayCount)) {
+      showPasteFeedback(btn, '⚠ No shifts found', true);
+    } else if (firstDate) {
+      logStaffCountAudit(firstDate);
+    }
+  }
+
+  function importFromText(raw) {
+    const btn = document.getElementById('pasteBtn');
+    const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+
+    if (normalized.includes('===PAY_PERIOD===')) {
+      importPayPeriodCompact(normalized);
+      return;
+    }
+
+    if (isWorksheetScheduleData(normalized)) {
+      importWorksheetSchedule(raw, btn);
+      return;
+    }
+
+    if (isPayPeriodWMTHTML(normalized)) {
+      snapshot('Paste pay period');
+      const tsv = extractPayPeriodTSVFromHTML(normalized);
+      if (!tsv) {
+        showPasteFeedback(btn, '⚠ Could not parse WMT grid', true);
+        return;
+      }
+      if (!finishPayPeriodImport(importPayPeriodWMT(tsv), btn)) {
+        showPasteFeedback(btn, '⚠ No shifts found', true);
+      }
+      return;
+    }
+
+    if (isPayPeriodWMTData(normalized)) {
+      snapshot('Paste pay period');
+      if (!finishPayPeriodImport(importPayPeriodWMT(normalized), btn)) {
+        showPasteFeedback(btn, '⚠ No shifts found', true);
+      }
+      return;
+    }
+
+    const result = importSingleDayBlock(raw);
+    if (result.shifts === 0) {
+      showPasteFeedback(btn, raw.includes('===SCHEDULE_START===') ? '⚠ No valid shifts found' : '⚠ No schedule marker found', true);
+      return;
+    }
+
+    snapshot('Paste schedule');
+    sanitizeRequests();
+    if (result.date) document.getElementById('dateFilter').value = result.date;
+    VIEW_START = 4;
+    VIEW_END = 26;
     render();
     renderRequests();
-    logStaffCountAudit(targetDate);
-
-    showPasteFeedback(btn, '', false); // silent on success
+    if (result.date) logStaffCountAudit(result.date);
+    showPasteFeedback(btn, '✓ 1 day loaded', false);
   }
 
   // ── Leave type lookup ──
@@ -3751,18 +4213,17 @@
   // Expose for browser extension injection
   window.importFromText = importFromText;
   window.importPayPeriodHTML = importPayPeriodHTML;
+  window.pasteSchedule = pasteSchedule;
   (function init() {
     loadData();
+    initBookmarkletLinks();
     console.info('Shift Graph build:', BUILD_ID);
     updateUndoRedoBtns();
 
     const today = localDateStr();
     const dateFilter = document.getElementById('dateFilter');
     if (dateFilter) {
-      // If we have saved data, open to the most recent date; otherwise today
-      const savedDates = Object.keys(schedulesByDate).sort();
-      const startDate = savedDates.length ? savedDates[savedDates.length - 1] : today;
-      dateFilter.value = startDate;
+      dateFilter.value = today;
       dateFilter.addEventListener('change', () => { render(); renderRequests(); });
     }
     render();
