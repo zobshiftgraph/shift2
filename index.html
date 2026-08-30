@@ -978,7 +978,7 @@
           <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
           <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
           <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
-          <p class="bookmarklet-help">WMT Worksheet View — walks every date in the pay period</p>
+          <p class="bookmarklet-help">WMT Worksheet View — all pay-period dates; resumes if the page auto-refreshes</p>
           <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
           <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
         </div>
@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-08-28d';
+  const BUILD_ID = 'count-2026-08-30a';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1748,6 +1748,9 @@
   function getPayPeriodBookmarkletCode() {
     return `(async function(){
       var INDEX_RE=/\\/Views\\/WorksheetView\\/Index\\/(\\d+)/i;
+      var JOB_KEY='sgPayPeriodCopy';
+      var myRun=(window.__sgPPRun=(window.__sgPPRun||0)+1);
+      function stillRun(){return window.__sgPPRun===myRun;}
       function showToast(msg,err){
         var el=document.getElementById('sg-copy-toast');
         if(!el){
@@ -1760,13 +1763,9 @@
         el.textContent=msg;
         el.style.opacity='1';
         clearTimeout(el._t);
-        el._t=setTimeout(function(){el.style.opacity='0';},err?3500:2500);
+        el._t=setTimeout(function(){el.style.opacity='0';},err?4500:2800);
       }
       function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
-      function currentDayNum(){
-        var m=location.pathname.match(INDEX_RE);
-        return m?Number(m[1]):null;
-      }
       function indexHref(dayNum){
         var m=location.pathname.match(/^(.*\\/Views\\/WorksheetView\\/Index)(?:\\/\\d+)?\\/?$/i);
         return location.origin+(m?m[1]+'/'+dayNum:'/Views/WorksheetView/Index/'+dayNum);
@@ -1783,13 +1782,11 @@
           var dayNum=Number(m[1]);
           if(seen[dayNum]) continue;
           seen[dayNum]=true;
-          var td=a.closest('td');
-          days.push({dayNum:dayNum,href:a.href||indexHref(dayNum),label:((td&&td.textContent)||a.textContent||'').replace(/\\s+/g,' ').trim()});
+          days.push({dayNum:dayNum,href:indexHref(dayNum)});
         }
         days.sort(function(a,b){return a.dayNum-b.dayNum;});
         if(!days.length){
-          var n=currentDayNum();
-          if(n){for(var d=1;d<=14;d++) days.push({dayNum:d,href:indexHref(d),label:'Day '+d});}
+          for(var d=1;d<=14;d++) days.push({dayNum:d,href:indexHref(d)});
         }
         return days;
       }
@@ -1830,35 +1827,75 @@
         parseReqTable('tblSupRequests');
         return out;
       }
-      async function fetchDay(day,liveNum){
-        if(liveNum&&day.dayNum===liveNum) return extractDayText(document);
-        var url=day.href||indexHref(day.dayNum);
-        var res=await fetch(url,{credentials:'same-origin'});
+      async function fetchDay(day){
+        var res=await fetch(day.href,{credentials:'same-origin',cache:'no-store'});
         if(!res.ok) throw new Error('HTTP '+res.status);
         return extractDayText(new DOMParser().parseFromString(await res.text(),'text/html'));
       }
+      function jobId(days){return days.map(function(d){return d.dayNum;}).join('-');}
+      function loadJob(id){
+        try{
+          var j=JSON.parse(sessionStorage.getItem(JOB_KEY)||'null');
+          if(j&&j.id===id&&j.parts&&Date.now()-(j.ts||0)<600000) return j;
+        }catch(e){}
+        return null;
+      }
+      function saveJob(id,parts,done){
+        try{sessionStorage.setItem(JOB_KEY,JSON.stringify({id:id,parts:parts,done:done,ts:Date.now()}));}catch(e){}
+      }
+      function clearJob(){try{sessionStorage.removeItem(JOB_KEY);}catch(e){}}
+      function compactParts(parts){var out=[];for(var i=0;i<parts.length;i++){if(parts[i]) out.push(parts[i]);}return out;}
+
       if(document.getElementById('tblEditGrid')&&!document.getElementById('lblSelectedDate')){
         showToast('Open Worksheet View, not Edit Schedule',1);return;
       }
       if(!document.getElementById('lblSelectedDate')&&!document.getElementById('WorksheetViewDayStrip')){
         showToast('Open WMT Worksheet View first',1);return;
       }
+
       var days=collectDays();
       if(!days.length){showToast('No pay-period dates found',1);return;}
-      var parts=[],live=currentDayNum();
-      for(var i=0;i<days.length;i++){
-        showToast('Copying day '+(i+1)+' of '+days.length+'…');
-        try{
-          var text=await fetchDay(days[i],live);
-          if(text) parts.push(text);
-        }catch(e){}
-        if(i<days.length-1) await sleep(250);
+      var id=jobId(days);
+      var saved=loadJob(id);
+      var parts=new Array(days.length);
+      var startAt=0;
+      if(saved&&saved.parts){
+        for(var s=0;s<Math.min(saved.parts.length,days.length);s++){parts[s]=saved.parts[s]||null;}
+        startAt=saved.done||0;
+        while(startAt<days.length&&parts[startAt]) startAt++;
       }
-      if(!parts.length){showToast('No worksheet data copied',1);return;}
+
+      var ready=compactParts(parts);
+      if(ready.length>=days.length){
+        try{
+          await navigator.clipboard.writeText(ready.join('\\n'));
+          clearJob();
+          showToast('Copied '+ready.length+' days — paste in Shift Graph');
+          return;
+        }catch(e){clearJob();startAt=0;parts=new Array(days.length);}
+      }
+
+      if(startAt>0) showToast('Resuming day '+(startAt+1)+' of '+days.length+' (page refreshed)…');
+
+      var CONC=4;
+      for(var i=startAt;i<days.length;i+=CONC){
+        if(!stillRun()){showToast('Copy cancelled — bookmark clicked again',1);return;}
+        var batch=days.slice(i,Math.min(i+CONC,days.length));
+        showToast('Copying days '+(i+1)+'–'+(i+batch.length)+' of '+days.length+'…');
+        var results=await Promise.all(batch.map(function(day){return fetchDay(day).catch(function(){return null;});}));
+        for(var b=0;b<results.length;b++){if(results[b]) parts[i+b]=results[b];}
+        saveJob(id,parts,i+batch.length);
+        if(i+batch.length<days.length) await sleep(120);
+      }
+
+      ready=compactParts(parts);
+      if(!ready.length){showToast('No worksheet data copied',1);return;}
+      if(!stillRun()) return;
       try{
-        await navigator.clipboard.writeText(parts.join('\\n'));
-        showToast('Copied '+parts.length+' days — paste in Shift Graph');
-      }catch(e){showToast('Copy failed',1);}
+        await navigator.clipboard.writeText(ready.join('\\n'));
+        clearJob();
+        showToast('Copied '+ready.length+' days — paste in Shift Graph');
+      }catch(e){showToast('Copy failed — allow clipboard access',1);}
     })();`;
   }
 
