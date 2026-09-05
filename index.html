@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-09-05b';
+  const BUILD_ID = 'count-2026-09-05c';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1747,6 +1747,7 @@
 
   function getPayPeriodBookmarkletCode() {
     return `(async function(){
+      try{
       var INDEX_RE=/\\/Views\\/WorksheetView\\/Index\\/(\\d+)/i;
       var JOB_KEY='sgPayPeriodCopy';
       var myRun=(window.__sgPPRun=(window.__sgPPRun||0)+1);
@@ -1794,7 +1795,7 @@
         return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
       }
       function parseOptionDateKeys(text){
-        var keys=[],re=/(\d{1,2})\/(\d{1,2})\/(\d{4})/g,m;
+        var keys=[],re=/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/g,m;
         while((m=re.exec(String(text||'')))){
           keys.push(m[3]+'-'+String(m[1]).padStart(2,'0')+'-'+String(m[2]).padStart(2,'0'));
         }
@@ -2146,6 +2147,7 @@
         clearJob();
         showToast('Copied '+ready.length+' days — paste in Shift Graph');
       }catch(e){showToast('Copy failed — allow clipboard access',1);}
+      }catch(e){showToast('Copy Pay Period error: '+(e&&e.message?e.message:e),1);}
     })();`;
   }
 
