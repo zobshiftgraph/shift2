@@ -978,7 +978,7 @@
           <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
           <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
           <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
-          <p class="bookmarklet-help">WMT Worksheet View — full pay period; on the last 2 days also copies the following pay period</p>
+          <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
           <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
           <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
         </div>
@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-09-05c';
+  const BUILD_ID = 'count-2026-09-05d';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1945,43 +1945,12 @@
         if(!res.ok) throw new Error('HTTP '+res.status);
         return new DOMParser().parseFromString(await res.text(),'text/html');
       }
-      function activeDateKeys(days){
-        var keys={};
-        function add(text){
-          var k=dateKeyFromToken(text);
-          if(k) keys[k]=true;
-        }
-        var cur=currentDayNum();
-        if(cur){
-          for(var i=0;i<days.length;i++){
-            if(days[i].dayNum===cur) add(days[i].label||'');
-          }
-        }
-        var dateEl=document.getElementById('lblSelectedDate');
-        if(dateEl) add(dateEl.textContent||'');
-        keys[dateKeyFromDate(new Date())]=true;
-        return keys;
-      }
-      function shouldCopyNextPayPeriod(days){
-        if(!days||days.length<2) return false;
-        var active=activeDateKeys(days);
-        var tail=days.slice(-2);
-        for(var i=0;i<tail.length;i++){
-          var k=dateKeyFromToken(tail[i].label||'');
-          if(k&&active[k]) return true;
-          var cur=currentDayNum();
-          if(cur&&tail[i].dayNum===cur) return true;
-        }
-        return false;
-      }
       async function buildCopyPlan(){
         var days=collectDays();
         if(!days.length) return null;
         var plan=[];
         days.forEach(function(day){plan.push({day:day,tag:'c'+day.dayNum});});
-        var nextPPId=null;
-        if(shouldCopyNextPayPeriod(days)) nextPPId=getFollowingPayPeriodId(document);
-        return {plan:plan,ppId:currentPayPeriodId(),nextPPId:nextPPId};
+        return {plan:plan,ppId:currentPayPeriodId(),nextPPId:getFollowingPayPeriodId(document)};
       }
       function extractDayText(doc){
         var dateEl=doc.getElementById('lblSelectedDate');
@@ -2103,7 +2072,7 @@
 
       ready=compactParts(parts);
       if(built.nextPPId&&stillRun()){
-        showToast('Last days of PP — copying following pay period…');
+        showToast('Copying following pay period…');
         try{
           var nextDoc=await selectPayPeriod(built.nextPPId);
           var nextDays=collectDays(nextDoc);
@@ -2136,8 +2105,8 @@
         }catch(e){
           showToast('Next pay period copy failed',1);
         }
-      } else if(shouldCopyNextPayPeriod(plan.map(function(p){return p.day;}))&&!built.nextPPId){
-        showToast('Near end of PP but no following pay period found in WMT',1);
+      } else if(!built.nextPPId){
+        showToast('No following pay period listed in WMT',1);
       }
 
       if(!ready.length){showToast('No worksheet data copied',1);return;}
