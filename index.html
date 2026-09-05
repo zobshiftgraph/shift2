@@ -978,7 +978,7 @@
           <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
           <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
           <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
-          <p class="bookmarklet-help">WMT Worksheet View — all pay-period dates; resumes if the page auto-refreshes</p>
+          <p class="bookmarklet-help">WMT Worksheet View — full pay period; on the 2nd-to-last day also copies the next pay period</p>
           <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
           <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
         </div>
@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-08-30a';
+  const BUILD_ID = 'count-2026-09-05a';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1763,16 +1763,27 @@
         el.textContent=msg;
         el.style.opacity='1';
         clearTimeout(el._t);
-        el._t=setTimeout(function(){el.style.opacity='0';},err?4500:2800);
+        el._t=setTimeout(function(){el.style.opacity='0';},err?4500:3200);
       }
       function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+      function currentDayNum(){
+        var m=location.pathname.match(INDEX_RE);
+        return m?Number(m[1]):null;
+      }
       function indexHref(dayNum){
         var m=location.pathname.match(/^(.*\\/Views\\/WorksheetView\\/Index)(?:\\/\\d+)?\\/?$/i);
         return location.origin+(m?m[1]+'/'+dayNum:'/Views/WorksheetView/Index/'+dayNum);
       }
-      function collectDays(){
+      function parseDateToken(text){
+        if(!text) return null;
+        var full=String(text).match(/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/);
+        if(!full) return null;
+        return Number(full[1])+'/'+Number(full[2])+'/'+full[3];
+      }
+      function collectDays(fromDoc){
+        var root=fromDoc||document;
         var days=[],seen={};
-        var strip=document.getElementById('WorksheetViewDayStrip')||document;
+        var strip=root.getElementById('WorksheetViewDayStrip')||root;
         var links=strip.querySelectorAll('a[href]');
         for(var i=0;i<links.length;i++){
           var a=links[i],raw=a.getAttribute('href')||'';
@@ -1782,13 +1793,83 @@
           var dayNum=Number(m[1]);
           if(seen[dayNum]) continue;
           seen[dayNum]=true;
-          days.push({dayNum:dayNum,href:indexHref(dayNum)});
+          var td=a.closest('td');
+          var label=((td&&td.textContent)||a.textContent||'').replace(/\\s+/g,' ').trim();
+          days.push({dayNum:dayNum,href:a.href||indexHref(dayNum),label:label});
         }
         days.sort(function(a,b){return a.dayNum-b.dayNum;});
-        if(!days.length){
-          for(var d=1;d<=14;d++) days.push({dayNum:d,href:indexHref(d)});
+        if(!days.length&&!fromDoc){
+          for(var d=1;d<=14;d++) days.push({dayNum:d,href:indexHref(d),label:'Day '+d});
         }
         return days;
+      }
+      function payPeriodSelect(doc){
+        doc=doc||document;
+        var form=doc.getElementById('formWorksheetViewFilterDropDown');
+        if(form){
+          var sel=form.querySelector('select[name="PayPeriodId"]');
+          if(sel) return sel;
+        }
+        return doc.querySelector('select[name="PayPeriodId"]');
+      }
+      function currentPayPeriodId(doc){var sel=payPeriodSelect(doc);return sel?sel.value:'';}
+      function getNextPayPeriodId(doc){
+        var sel=payPeriodSelect(doc);
+        if(!sel||sel.selectedIndex<0||sel.selectedIndex>=sel.options.length-1) return null;
+        var next=sel.options[sel.selectedIndex+1];
+        return next&&next.value?next.value:null;
+      }
+      function formAction(form){
+        var action=(form&&(form.getAttribute('action')||form.action))||'/Views/WorksheetView/SelectWorksheetView';
+        try{return new URL(action,location.href).href;}catch(e){return action;}
+      }
+      async function selectPayPeriod(payPeriodId,fromDoc){
+        var doc=fromDoc||document;
+        var form=doc.getElementById('formWorksheetViewFilterDropDown')||doc.querySelector('form[action*="SelectWorksheetView"]');
+        var params=new URLSearchParams();
+        if(form){
+          var data=new FormData(form);
+          data.forEach(function(value,key){
+            if(typeof value==='string') params.append(key,value);
+          });
+        }
+        params.set('PayPeriodId',String(payPeriodId));
+        var res=await fetch(formAction(form),{
+          method:'POST',
+          credentials:'same-origin',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:params.toString(),
+          redirect:'follow'
+        });
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        return new DOMParser().parseFromString(await res.text(),'text/html');
+      }
+      function isSecondToLastPayPeriodDay(days){
+        if(!days||days.length<2) return false;
+        var pen=days[days.length-2];
+        var cur=currentDayNum();
+        if(cur&&pen.dayNum===cur) return true;
+        var penDate=parseDateToken(pen.label||'');
+        var dateEl=document.getElementById('lblSelectedDate');
+        if(dateEl&&penDate){
+          var selDate=parseDateToken(dateEl.textContent||'');
+          if(selDate&&selDate===penDate) return true;
+        }
+        if(penDate){
+          var now=new Date();
+          var today=(now.getMonth()+1)+'/'+now.getDate()+'/'+now.getFullYear();
+          if(today===penDate) return true;
+        }
+        return false;
+      }
+      async function buildCopyPlan(){
+        var days=collectDays();
+        if(!days.length) return null;
+        var plan=[];
+        days.forEach(function(day){plan.push({day:day,tag:'c'+day.dayNum});});
+        var nextPPId=null;
+        if(isSecondToLastPayPeriodDay(days)) nextPPId=getNextPayPeriodId(document);
+        return {plan:plan,ppId:currentPayPeriodId(),nextPPId:nextPPId};
       }
       function extractDayText(doc){
         var dateEl=doc.getElementById('lblSelectedDate');
@@ -1827,12 +1908,15 @@
         parseReqTable('tblSupRequests');
         return out;
       }
-      async function fetchDay(day){
+      async function fetchDay(day,liveNum){
+        if(liveNum&&day.dayNum===liveNum) return extractDayText(document);
         var res=await fetch(day.href,{credentials:'same-origin',cache:'no-store'});
         if(!res.ok) throw new Error('HTTP '+res.status);
         return extractDayText(new DOMParser().parseFromString(await res.text(),'text/html'));
       }
-      function jobId(days){return days.map(function(d){return d.dayNum;}).join('-');}
+      function jobId(meta){
+        return (meta.ppId||'pp')+(meta.nextPPId?'+'+meta.nextPPId:'')+':'+meta.plan.map(function(p){return p.tag;}).join(',');
+      }
       function loadJob(id){
         try{
           var j=JSON.parse(sessionStorage.getItem(JOB_KEY)||'null');
@@ -1853,42 +1937,64 @@
         showToast('Open WMT Worksheet View first',1);return;
       }
 
-      var days=collectDays();
-      if(!days.length){showToast('No pay-period dates found',1);return;}
-      var id=jobId(days);
+      var built=await buildCopyPlan();
+      if(!built||!built.plan.length){showToast('No pay-period dates found',1);return;}
+      var plan=built.plan;
+      var id=jobId(built);
       var saved=loadJob(id);
-      var parts=new Array(days.length);
+      var parts=new Array(plan.length);
       var startAt=0;
       if(saved&&saved.parts){
-        for(var s=0;s<Math.min(saved.parts.length,days.length);s++){parts[s]=saved.parts[s]||null;}
+        for(var s=0;s<Math.min(saved.parts.length,plan.length);s++){parts[s]=saved.parts[s]||null;}
         startAt=saved.done||0;
-        while(startAt<days.length&&parts[startAt]) startAt++;
+        while(startAt<plan.length&&parts[startAt]) startAt++;
       }
 
       var ready=compactParts(parts);
-      if(ready.length>=days.length){
+      if(ready.length>=plan.length&&!built.nextPPId){
         try{
           await navigator.clipboard.writeText(ready.join('\\n'));
           clearJob();
           showToast('Copied '+ready.length+' days — paste in Shift Graph');
           return;
-        }catch(e){clearJob();startAt=0;parts=new Array(days.length);}
+        }catch(e){clearJob();startAt=0;parts=new Array(plan.length);}
       }
 
-      if(startAt>0) showToast('Resuming day '+(startAt+1)+' of '+days.length+' (page refreshed)…');
+      if(startAt>0) showToast('Resuming day '+(startAt+1)+' of '+plan.length+' (page refreshed)…');
 
+      var live=currentDayNum();
       var CONC=4;
-      for(var i=startAt;i<days.length;i+=CONC){
+      for(var i=startAt;i<plan.length;i+=CONC){
         if(!stillRun()){showToast('Copy cancelled — bookmark clicked again',1);return;}
-        var batch=days.slice(i,Math.min(i+CONC,days.length));
-        showToast('Copying days '+(i+1)+'–'+(i+batch.length)+' of '+days.length+'…');
-        var results=await Promise.all(batch.map(function(day){return fetchDay(day).catch(function(){return null;});}));
+        var batch=plan.slice(i,Math.min(i+CONC,plan.length));
+        showToast('Copying days '+(i+1)+'–'+(i+batch.length)+' of '+plan.length+'…');
+        var results=await Promise.all(batch.map(function(entry){
+          return fetchDay(entry.day,entry.tag.charAt(0)==='c'?live:null).catch(function(){return null;});
+        }));
         for(var b=0;b<results.length;b++){if(results[b]) parts[i+b]=results[b];}
         saveJob(id,parts,i+batch.length);
-        if(i+batch.length<days.length) await sleep(120);
+        if(i+batch.length<plan.length) await sleep(120);
       }
 
       ready=compactParts(parts);
+      if(built.nextPPId&&stillRun()){
+        showToast('2nd-to-last day — copying next pay period…');
+        try{
+          var nextDoc=await selectPayPeriod(built.nextPPId);
+          var nextDays=collectDays(nextDoc);
+          for(var n=0;n<nextDays.length;n+=CONC){
+            if(!stillRun()){showToast('Copy cancelled — bookmark clicked again',1);return;}
+            var nbatch=nextDays.slice(n,Math.min(n+CONC,nextDays.length));
+            showToast('Next PP: days '+(n+1)+'–'+(n+nbatch.length)+' of '+nextDays.length+'…');
+            var nresults=await Promise.all(nbatch.map(function(day){return fetchDay(day,null).catch(function(){return null;});}));
+            for(var nb=0;nb<nresults.length;nb++){if(nresults[nb]) ready.push(nresults[nb]);}
+            if(n+nbatch.length<nextDays.length) await sleep(120);
+          }
+        }catch(e){
+          showToast('Next pay period copy failed',1);
+        }
+      }
+
       if(!ready.length){showToast('No worksheet data copied',1);return;}
       if(!stillRun()) return;
       try{
