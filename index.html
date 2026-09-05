@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-09-05d';
+  const BUILD_ID = 'count-2026-09-05e';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1495,6 +1495,7 @@
   }
 
   function importPayPeriodHTML(text) {
+    const keepDate = getActiveDate();
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
     if (normalized.includes('===DATE===') && normalized.includes('===SCHEDULE_START===')) {
       importFromText(text);
@@ -1508,14 +1509,14 @@
       snapshot('Paste pay period');
       const tsv = extractPayPeriodTSVFromHTML(normalized);
       if (!tsv) { alert('Could not find WMT Edit Schedule grid in pasted HTML.'); return; }
-      if (!finishPayPeriodImport(importPayPeriodWMT(tsv), document.getElementById('ppBtn') || document.getElementById('pasteBtn'))) {
+      if (!finishPayPeriodImport(importPayPeriodWMT(tsv), document.getElementById('ppBtn') || document.getElementById('pasteBtn'), keepDate)) {
         alert('No shifts found in pay period data.');
       }
       return;
     }
     if (isPayPeriodWMTData(normalized)) {
       snapshot('Paste pay period');
-      if (!finishPayPeriodImport(importPayPeriodWMT(normalized), document.getElementById('ppBtn') || document.getElementById('pasteBtn'))) {
+      if (!finishPayPeriodImport(importPayPeriodWMT(normalized), document.getElementById('ppBtn') || document.getElementById('pasteBtn'), keepDate)) {
         alert('No shifts found in pay period data.');
       }
       return;
@@ -1689,12 +1690,11 @@
     return totalImported;
   }
 
-  function finishPayPeriodImport(totalImported, btn, preferredDate, dayCount) {
+  function finishPayPeriodImport(totalImported, btn, keepDate, dayCount) {
     if (!totalImported) return false;
 
-    const today = localDateStr();
     const dateFilter = document.getElementById('dateFilter');
-    if (dateFilter) dateFilter.value = preferredDate || today;
+    if (dateFilter) dateFilter.value = keepDate || getActiveDate();
 
     render();
     renderRequests();
@@ -1711,6 +1711,7 @@
   }
 
   function importPayPeriodCompact(text) {
+    const keepDate = getActiveDate();
     const lines = text.split('\n').map(l => l.trim().replace(/\r/g, '')).filter(Boolean);
     const ppIdx = lines.indexOf('===PAY_PERIOD===');
     const schIdx = lines.indexOf('===PP_SCHEDULE===');
@@ -1740,7 +1741,7 @@
       }
     }
 
-    if (!finishPayPeriodImport(totalImported, document.getElementById('ppBtn') || document.getElementById('pasteBtn'))) {
+    if (!finishPayPeriodImport(totalImported, document.getElementById('ppBtn') || document.getElementById('pasteBtn'), keepDate)) {
       alert('No shifts found in pay period data.');
     }
   }
@@ -2583,7 +2584,7 @@
     return { totalImported, firstDate, dayCount: blocks.length };
   }
 
-  function importWorksheetSchedule(raw, btn) {
+  function importWorksheetSchedule(raw, btn, keepDate) {
     const blocks = splitWorksheetDays(raw);
     if (!blocks.length) {
       showPasteFeedback(btn, '⚠ No worksheet days found', true);
@@ -2598,27 +2599,28 @@
       }
       snapshot('Paste schedule');
       sanitizeRequests();
-      if (result.date) document.getElementById('dateFilter').value = result.date;
+      document.getElementById('dateFilter').value = keepDate;
       VIEW_START = 4;
       VIEW_END = 26;
       render();
       renderRequests();
-      if (result.date) logStaffCountAudit(result.date);
+      logStaffCountAudit(keepDate);
       showPasteFeedback(btn, '✓ 1 day loaded', false);
       return;
     }
 
     snapshot('Paste pay period');
-    const { totalImported, firstDate, dayCount } = importWorksheetPayPeriod(raw);
-    if (!finishPayPeriodImport(totalImported, btn, firstDate, dayCount)) {
+    const { totalImported, dayCount } = importWorksheetPayPeriod(raw);
+    if (!finishPayPeriodImport(totalImported, btn, keepDate, dayCount)) {
       showPasteFeedback(btn, '⚠ No shifts found', true);
-    } else if (firstDate) {
-      logStaffCountAudit(firstDate);
+    } else {
+      logStaffCountAudit(keepDate);
     }
   }
 
   function importFromText(raw) {
     const btn = document.getElementById('pasteBtn');
+    const keepDate = getActiveDate();
     const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
 
     if (normalized.includes('===PAY_PERIOD===')) {
@@ -2627,7 +2629,7 @@
     }
 
     if (isWorksheetScheduleData(normalized)) {
-      importWorksheetSchedule(raw, btn);
+      importWorksheetSchedule(raw, btn, keepDate);
       return;
     }
 
@@ -2638,7 +2640,7 @@
         showPasteFeedback(btn, '⚠ Could not parse WMT grid', true);
         return;
       }
-      if (!finishPayPeriodImport(importPayPeriodWMT(tsv), btn)) {
+      if (!finishPayPeriodImport(importPayPeriodWMT(tsv), btn, keepDate)) {
         showPasteFeedback(btn, '⚠ No shifts found', true);
       }
       return;
@@ -2646,7 +2648,7 @@
 
     if (isPayPeriodWMTData(normalized)) {
       snapshot('Paste pay period');
-      if (!finishPayPeriodImport(importPayPeriodWMT(normalized), btn)) {
+      if (!finishPayPeriodImport(importPayPeriodWMT(normalized), btn, keepDate)) {
         showPasteFeedback(btn, '⚠ No shifts found', true);
       }
       return;
@@ -2660,12 +2662,12 @@
 
     snapshot('Paste schedule');
     sanitizeRequests();
-    if (result.date) document.getElementById('dateFilter').value = result.date;
+    document.getElementById('dateFilter').value = keepDate;
     VIEW_START = 4;
     VIEW_END = 26;
     render();
     renderRequests();
-    if (result.date) logStaffCountAudit(result.date);
+    logStaffCountAudit(keepDate);
     showPasteFeedback(btn, '✓ 1 day loaded', false);
   }
 
