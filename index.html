@@ -1506,16 +1506,16 @@
       return;
     }
     if (isPayPeriodWMTHTML(normalized)) {
-      snapshot('Paste pay period');
       const tsv = extractPayPeriodTSVFromHTML(normalized);
       if (!tsv) { alert('Could not find WMT Edit Schedule grid in pasted HTML.'); return; }
+      prepareFullReplaceImport('Paste pay period');
       if (!finishPayPeriodImport(importPayPeriodWMT(tsv), document.getElementById('ppBtn') || document.getElementById('pasteBtn'), keepDate)) {
         alert('No shifts found in pay period data.');
       }
       return;
     }
     if (isPayPeriodWMTData(normalized)) {
-      snapshot('Paste pay period');
+      prepareFullReplaceImport('Paste pay period');
       if (!finishPayPeriodImport(importPayPeriodWMT(normalized), document.getElementById('ppBtn') || document.getElementById('pasteBtn'), keepDate)) {
         alert('No shifts found in pay period data.');
       }
@@ -1717,7 +1717,7 @@
     const schIdx = lines.indexOf('===PP_SCHEDULE===');
     if (ppIdx === -1 || schIdx === -1) { alert('Invalid pay period format.'); return; }
 
-    snapshot('Paste pay period');
+    prepareFullReplaceImport('Paste pay period');
 
     const dateStrs = lines[ppIdx + 1].split(',');
     const dates = dateStrs.map(d => {
@@ -2689,13 +2689,16 @@
       return;
     }
 
+    prepareFullReplaceImport(blocks.length === 1 ? 'Paste schedule' : 'Paste pay period');
+
     if (blocks.length === 1) {
       const result = importSingleDayBlock(blocks[0]);
       if (result.shifts === 0) {
         showPasteFeedback(btn, '⚠ No valid shifts found', true);
+        render();
+        renderRequests();
         return;
       }
-      snapshot('Paste schedule');
       sanitizeRequests();
       document.getElementById('dateFilter').value = keepDate;
       VIEW_START = 4;
@@ -2707,7 +2710,6 @@
       return;
     }
 
-    snapshot('Paste pay period');
     const { totalImported, dayCount } = importWorksheetPayPeriod(raw);
     if (!finishPayPeriodImport(totalImported, btn, keepDate, dayCount)) {
       showPasteFeedback(btn, '⚠ No shifts found', true);
@@ -2732,12 +2734,12 @@
     }
 
     if (isPayPeriodWMTHTML(normalized)) {
-      snapshot('Paste pay period');
       const tsv = extractPayPeriodTSVFromHTML(normalized);
       if (!tsv) {
         showPasteFeedback(btn, '⚠ Could not parse WMT grid', true);
         return;
       }
+      prepareFullReplaceImport('Paste pay period');
       if (!finishPayPeriodImport(importPayPeriodWMT(tsv), btn, keepDate)) {
         showPasteFeedback(btn, '⚠ No shifts found', true);
       }
@@ -2745,20 +2747,21 @@
     }
 
     if (isPayPeriodWMTData(normalized)) {
-      snapshot('Paste pay period');
+      prepareFullReplaceImport('Paste pay period');
       if (!finishPayPeriodImport(importPayPeriodWMT(normalized), btn, keepDate)) {
         showPasteFeedback(btn, '⚠ No shifts found', true);
       }
       return;
     }
 
+    prepareFullReplaceImport('Paste schedule');
     const result = importSingleDayBlock(raw);
     if (result.shifts === 0) {
       showPasteFeedback(btn, raw.includes('===SCHEDULE_START===') ? '⚠ No valid shifts found' : '⚠ No schedule marker found', true);
+      render();
+      renderRequests();
       return;
     }
-
-    snapshot('Paste schedule');
     sanitizeRequests();
     document.getElementById('dateFilter').value = keepDate;
     VIEW_START = 4;
@@ -3651,14 +3654,25 @@
     renderRequests();
   }
 
-  function clearAllDays() {
-    if (!confirm('Clear all schedules and requests for every day?')) return;
-    snapshot('Clear all days');
+  function clearAllStoredDays() {
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
     Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
     Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
     Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
-    localStorage.removeItem(STORAGE_KEY);
+    previewReqIds.clear();
+    wxInitials.clear();
+  }
+
+  /** Undo snapshot, then wipe schedules + requests before a full replace import. */
+  function prepareFullReplaceImport(label) {
+    snapshot(label);
+    clearAllStoredDays();
+  }
+
+  function clearAllDays() {
+    if (!confirm('Clear all schedules and requests for every day?')) return;
+    snapshot('Clear all days');
+    clearAllStoredDays();
     render();
     renderRequests();
   }
@@ -4502,4 +4516,142 @@
     if (!shift.tosList) shift.tosList = [];
     shift.tosList.push({
       id: Date.now() + Math.random(),
-      from: rangeVal.split(/[-–]/)[0].
+      from: rangeVal.split(/[-–]/)[0].trim(),
+      to:   rangeVal.split(/[-–]/)[1].trim(),
+      tosStart, tosEnd,
+      removed: false
+    });
+
+    refreshRowOrder(getActiveDate());
+    render();
+    closeShiftModal();
+  }
+
+  // ── Persistence ──
+  const STORAGE_KEY = 'shiftGraph_v1';
+
+  function saveData() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        schedulesByDate,
+        requestsByDate,
+        rowOrderByDate,
+        importRawByDate
+      }));
+    } catch(e) { console.warn('Save failed:', e); }
+  }
+
+  function loadData() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data.schedulesByDate) {
+        Object.entries(data.schedulesByDate).forEach(([date, shifts]) => {
+          schedulesByDate[date] = shifts.map(repairShiftTimes);
+        });
+      }
+      normalizeAllSchedules();
+      if (data.requestsByDate)  Object.assign(requestsByDate,  data.requestsByDate);
+      sanitizeRequests();
+      if (data.rowOrderByDate)  Object.assign(rowOrderByDate,  data.rowOrderByDate);
+      if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
+      rebuildRequestsFromImportRaw();
+    } catch(e) { console.warn('Load failed:', e); }
+  }
+
+  // Patch render to auto-save on every call
+  const _origRender = render;
+  render = function() {
+    _origRender();
+    saveData();
+    // Re-apply glow to all previewed bars (DOM was rebuilt)
+    const activeDate = getActiveDate();
+    previewReqIds.forEach(pid => {
+      const r = (requestsByDate[activeDate] || []).find(x => String(x.id) === pid);
+      if (!r) return;
+      document.querySelectorAll(`.shift-bar[data-name="${r.cpc}"]`)
+        .forEach(bar => bar.classList.add('visualize-glow'));
+    });
+  };
+
+  // Also save when renderRequests is called (request state changes)
+  const _origRenderRequests = renderRequests;
+  renderRequests = function() { _origRenderRequests(); saveData(); };
+
+  // Safety net: save on page close/refresh
+  window.addEventListener('beforeunload', saveData);
+
+  // Expose for browser extension injection
+  window.importFromText = importFromText;
+  window.importPayPeriodHTML = importPayPeriodHTML;
+  window.pasteSchedule = pasteSchedule;
+  (function init() {
+    loadData();
+    initBookmarkletLinks();
+    console.info('Shift Graph build:', BUILD_ID);
+    updateUndoRedoBtns();
+
+    const today = localDateStr();
+    const dateFilter = document.getElementById('dateFilter');
+    if (dateFilter) {
+      dateFilter.value = today;
+      dateFilter.addEventListener('change', () => { render(); renderRequests(); });
+    }
+    render();
+    renderRequests();
+
+    document.addEventListener('keydown', e => {
+      if (e.target.matches('input, textarea, select')) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undoAction();
+      } else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redoAction();
+      }
+    });
+
+    const ro = new ResizeObserver(() => fitRows());
+    const cb = document.querySelector('.chart-body');
+    if (cb) ro.observe(cb);
+
+    // Check for data sent from the browser extension
+    function checkExtensionData() {
+      // Direct injection fallback
+      if (window._sgPendingImport) {
+        const data = window._sgPendingImport;
+        window._sgPendingImport = null;
+        importFromText(data);
+        return;
+      }
+      // chrome.storage fallback (works when Shift Graph is served, not file://)
+      if (typeof chrome !== 'undefined' && chrome.storage) {
+        try {
+          chrome.storage.local.get('pendingImport', result => {
+            if (result && result.pendingImport && result.pendingImport.data) {
+              chrome.storage.local.remove('pendingImport');
+              importFromText(result.pendingImport.data);
+            }
+          });
+        } catch(e) {}
+      }
+    }
+    checkExtensionData();
+    window.addEventListener('focus', checkExtensionData);
+    // Also poll every 2s in case focus event missed
+    setInterval(checkExtensionData, 2000);
+
+    // Listen for data from browser extension (custom event fallback)
+    window.addEventListener('sgImport', e => {
+      if (e.detail) importFromText(e.detail);
+    });
+
+    setInterval(() => { if (getActiveDate() === localDateStr()) render(); }, 60000);
+  })();
+</script>
+</body>
+</html>
+ 
