@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-09d';
+  const BUILD_ID = 'count-2026-10-09e';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1930,18 +1930,53 @@
         }
         return null;
       }
+      function isEditScheduleForm(form){
+        return !!(form&&(form.querySelector('#tblEditGrid')||form.querySelector('#submit-all')));
+      }
       function worksheetForm(doc){
         doc=doc||document;
         var sel=payPeriodSelect(doc);
+        if(sel&&sel.form&&!isEditScheduleForm(sel.form)) return sel.form;
         if(sel&&sel.closest){
           var f=sel.closest('form');
-          if(f) return f;
+          if(f&&!isEditScheduleForm(f)) return f;
         }
+        var area=doc.querySelector('select[name="AreaId"]');
+        if(area&&area.form&&!isEditScheduleForm(area.form)) return area.form;
         var byAction=doc.querySelector('form[action*="SelectWorksheetView"],form[action*="WorksheetView"]');
-        if(byAction) return byAction;
+        if(byAction&&!isEditScheduleForm(byAction)) return byAction;
         var root=doc.getElementById('formWorksheetViewFilterDropDown');
-        if(root&&root.tagName==='FORM') return root;
-        if(root&&root.closest){var f2=root.closest('form');if(f2) return f2;}
+        if(root&&root.tagName==='FORM'&&!isEditScheduleForm(root)) return root;
+        if(root&&root.closest){var f2=root.closest('form');if(f2&&!isEditScheduleForm(f2)) return f2;}
+        return null;
+      }
+      function payPeriodStartParamForId(doc,payPeriodId){
+        var sel=payPeriodSelect(doc);
+        if(!sel) return null;
+        for(var i=0;i<sel.options.length;i++){
+          if(String(sel.options[i].value)!==String(payPeriodId)) continue;
+          var keys=parseOptionDateKeys(sel.options[i].textContent||'');
+          if(!keys.length) return null;
+          var p=keys[0].split('-');
+          return Number(p[1])+'/'+Number(p[2])+'/'+p[0]+' 12:00:00 AM';
+        }
+        return null;
+      }
+      function buildNextPeriodDayList(doc,nextPPId){
+        var opts=listPayPeriodOptions(doc);
+        for(var i=0;i<opts.length;i++){
+          if(String(opts[i].id)!==String(nextPPId)||!opts[i].start) continue;
+          var cur=new Date(opts[i].start+'T12:00:00');
+          var days=[];
+          for(var d=1;d<=14;d++){
+            var dt=new Date(cur);
+            dt.setDate(cur.getDate()+(d-1));
+            var mm=dt.getMonth()+1,dd=dt.getDate(),yy=dt.getFullYear();
+            var selectDate=mm+'/'+dd+'/'+yy;
+            days.push({dayNum:d,href:indexHref(d),selectDate:selectDate,label:selectDate});
+          }
+          return days;
+        }
         return null;
       }
       function formAction(form){
@@ -1969,13 +2004,20 @@
         if(ppSel&&ppSel.name){
           params.set(ppSel.name,String(payPeriodId));
         }
+        var ppStart=payPeriodStartParamForId(doc,payPeriodId);
+        if(ppStart) params.set('PayPeriodStart',ppStart);
         var area=doc.querySelector('select[name="AreaId"]');
         if(area&&area.value) params.set('AreaId',area.value);
+        if(form&&!params.has('__RequestVerificationToken')){
+          var tok=form.querySelector('input[name="__RequestVerificationToken"]');
+          if(tok&&tok.value) params.set('__RequestVerificationToken',tok.value);
+        }
         return {form:form,params:params};
       }
       async function selectPayPeriod(payPeriodId,fromDoc){
         var built=buildPayPeriodParams(payPeriodId,fromDoc);
-        var res=await fetch(formAction(built.form),{
+        var action=formAction(built.form);
+        var res=await fetch(action,{
           method:'POST',
           credentials:'same-origin',
           headers:{'Content-Type':'application/x-www-form-urlencoded'},
@@ -1984,7 +2026,13 @@
         });
         if(!res.ok) throw new Error('Pay period switch HTTP '+res.status);
         await sleep(450);
-        return new DOMParser().parseFromString(await res.text(),'text/html');
+        var html=await res.text();
+        var parsed=new DOMParser().parseFromString(html,'text/html');
+        var got=String(currentPayPeriodId(parsed)||'');
+        if(got&&got!==String(payPeriodId)){
+          throw new Error('Pay period POST returned '+got+' not '+payPeriodId);
+        }
+        return parsed;
       }
       function dayUrlWithPayPeriod(day,payPeriodId){
         var url=day.href||indexHref(day.dayNum);
@@ -2010,16 +2058,29 @@
         return nextDays;
       }
       async function openFollowingPayPeriod(nextPPId,lastCurrentKey){
-        var nextDoc=await selectPayPeriod(nextPPId);
-        var probe={dayNum:1,href:indexHref(1),label:''};
-        var firstText=await fetchDay(probe,null,nextPPId);
+        var planned=buildNextPeriodDayList(document,nextPPId);
+        var nextDoc=null;
+        try{nextDoc=await selectPayPeriod(nextPPId);}catch(postErr){nextDoc=null;}
+        var probe=planned&&planned.length?planned[0]:{dayNum:1,href:indexHref(1),label:''};
+        var firstText=await fetchDay(probe,null,nextPPId,probe.selectDate||null);
         var dm=firstText&&String(firstText).match(/===DATE===\\s*\\n([^\\n]+)/);
         var firstKey=dm?dateKeyFromToken(dm[1]):null;
         if(lastCurrentKey&&(!firstKey||firstKey<=lastCurrentKey)){
-          throw new Error('WMT stayed on pay period '+nextPPId+' (first day '+(firstKey||'?')+')');
+          if(planned&&planned.length){
+            firstText=await fetchDay(planned[0],null,nextPPId,planned[0].selectDate);
+            dm=firstText&&String(firstText).match(/===DATE===\\s*\\n([^\\n]+)/);
+            firstKey=dm?dateKeyFromToken(dm[1]):null;
+          }
         }
-        var nextDays=collectDays(nextDoc);
-        if(!nextDays.length) nextDays=defaultNextDays();
+        if(lastCurrentKey&&(!firstKey||firstKey<=lastCurrentKey)){
+          throw new Error('Next PP '+nextPPId+' first day '+(firstKey||'?')+' (need after '+lastCurrentKey+')');
+        }
+        var nextDays=planned||collectDays(nextDoc)||defaultNextDays();
+        if(planned){
+          for(var pi=0;pi<planned.length;pi++){
+            if(planned[pi].selectDate) nextDays[pi]=planned[pi];
+          }
+        }
         return {nextDoc:nextDoc,nextDays:nextDays,firstText:firstText,nextPPId:nextPPId};
       }
       async function buildCopyPlan(){
@@ -2066,9 +2127,18 @@
         parseReqTable('tblSupRequests');
         return out;
       }
-      async function fetchDay(day,liveNum,payPeriodId){
-        if(liveNum&&day.dayNum===liveNum&&!payPeriodId) return extractDayText(document);
-        var urls=[dayUrlWithPayPeriod(day,payPeriodId),day.href,indexHref(day.dayNum)].filter(Boolean);
+      function dayUrlWithSelectDate(day,payPeriodId,selectDate){
+        if(!selectDate) return null;
+        try{
+          var u=new URL(indexHref(day.dayNum),location.href);
+          u.searchParams.set('selectDate',selectDate);
+          if(payPeriodId) u.searchParams.set('PayPeriodId',String(payPeriodId));
+          return u.href;
+        }catch(e){return null;}
+      }
+      async function fetchDay(day,liveNum,payPeriodId,selectDate){
+        if(liveNum&&day.dayNum===liveNum&&!payPeriodId&&!selectDate) return extractDayText(document);
+        var urls=[dayUrlWithSelectDate(day,payPeriodId,selectDate),dayUrlWithPayPeriod(day,payPeriodId),day.href,indexHref(day.dayNum)].filter(Boolean);
         var seen={},tried=[];
         for(var u=0;u<urls.length;u++){
           if(seen[urls[u]]) continue;
@@ -2209,7 +2279,7 @@
             if(!stillRun()){showToast('Copy cancelled — bookmark clicked again',1);return;}
             if(n>0&&(n===1||n%4===0)) await selectPayPeriod(nextPPId);
             showToast('Next PP: day '+(n+1)+' of '+nextDays.length+'…','progress');
-            var ntext=await fetchDay(nextDays[n],null,nextPPId);
+            var ntext=await fetchDay(nextDays[n],null,nextPPId,nextDays[n].selectDate||null);
             var dm2=ntext?ntext.match(/===DATE===\\s*\\n([^\\n]+)/):null;
             var dk=dm2?dateKeyFromToken(dm2[1]):null;
             if(!ntext) continue;
