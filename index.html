@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-09a';
+  const BUILD_ID = 'count-2026-10-09b';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1969,10 +1969,6 @@
         });
         if(!res.ok) throw new Error('HTTP '+res.status);
         var nextDoc=new DOMParser().parseFromString(await res.text(),'text/html');
-        var got=String(currentPayPeriodId(nextDoc)||'');
-        if(got&&got!==String(payPeriodId)&&payPeriodSelect(nextDoc)){
-          throw new Error('WMT pay period switch failed (got '+got+')');
-        }
         return nextDoc;
       }
       function dayUrlWithPayPeriod(day,payPeriodId){
@@ -1998,21 +1994,26 @@
         for(var nd=1;nd<=14;nd++) nextDays.push({dayNum:nd,href:indexHref(nd),label:'Day '+nd});
         return nextDays;
       }
+      async function fetchedFirstDateKey(payPeriodId){
+        var probe={dayNum:1,href:indexHref(1),label:''};
+        var text=await fetchDay(probe,null,payPeriodId).catch(function(){return null;});
+        var dm=text&&String(text).match(/===DATE===\\s*\\n([^\\n]+)/);
+        return dm?dateKeyFromToken(dm[1]):null;
+      }
       async function openFollowingPayPeriod(nextPPId,lastCurrentKey){
         var nextDoc=await selectPayPeriod(nextPPId);
-        var nextDays=collectDays(nextDoc);
-        if(!nextDays.length) nextDays=defaultNextDays();
-        var firstKey=dateKeyFromToken(nextDays[0].label||'');
-        if(lastCurrentKey&&firstKey&&firstKey<=lastCurrentKey){
-          await sleep(350);
+        await sleep(500);
+        var firstKey=await fetchedFirstDateKey(nextPPId);
+        if(lastCurrentKey&&(!firstKey||firstKey<=lastCurrentKey)){
           nextDoc=await selectPayPeriod(nextPPId);
-          nextDays=collectDays(nextDoc);
-          if(!nextDays.length) nextDays=defaultNextDays();
-          firstKey=dateKeyFromToken(nextDays[0].label||'');
+          await sleep(650);
+          firstKey=await fetchedFirstDateKey(nextPPId);
         }
-        if(lastCurrentKey&&firstKey&&firstKey<=lastCurrentKey){
+        if(lastCurrentKey&&(!firstKey||firstKey<=lastCurrentKey)){
           throw new Error('WMT stayed on the current pay period');
         }
+        var nextDays=collectDays(nextDoc);
+        if(!nextDays.length) nextDays=defaultNextDays();
         await primePayPeriodFetches(nextDoc,nextDays);
         return {nextDoc:nextDoc,nextDays:nextDays};
       }
