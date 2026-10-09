@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-09g';
+  const BUILD_ID = 'count-2026-10-09h';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -3340,6 +3340,18 @@
     };
   }
 
+  function resetRequestsPanelUI() {
+    const wrap = document.getElementById('requestsWrap');
+    const body = document.getElementById('requestsBody');
+    const badge = document.getElementById('reqBadge');
+    if (!wrap || !body || !badge) return;
+    wrap.style.display = 'none';
+    wrap.classList.remove('collapsed');
+    body.replaceChildren();
+    body.innerHTML = '<div class="req-empty">No pending or denied requests</div>';
+    badge.textContent = '0';
+  }
+
   function renderRequests() {
     const date = getActiveDate();
     const reqs = getRequestsForPanel(date);
@@ -3351,9 +3363,7 @@
     const active = reqs.filter(r => !r.resolvedAction);
 
     if (reqs.length === 0) {
-      wrap.style.display = 'none';
-      body.innerHTML = '<div class="req-empty">No pending or denied requests</div>';
-      badge.textContent = '0';
+      resetRequestsPanelUI();
       return;
     }
 
@@ -3849,6 +3859,15 @@
     });
   }
 
+  function clearExtensionPendingImport() {
+    window._sgPendingImport = null;
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.remove('pendingImport');
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   function clearAllStoredDays() {
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
     Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
@@ -3857,6 +3876,7 @@
     previewReqIds.clear();
     wxInitials.clear();
     purgeOrphanRequests();
+    clearExtensionPendingImport();
   }
 
   /** Undo snapshot, then wipe schedules + requests before a full replace import. */
@@ -3869,7 +3889,10 @@
     if (!confirm('Clear all schedules and requests for every day?')) return;
     snapshot('Clear all days');
     clearAllStoredDays();
+    blockAutoImportBriefly();
     saveData();
+    applyPersistedPayload(readPersistedPayload(), { rebuildFromRaw: false });
+    resetRequestsPanelUI();
     render();
     renderRequests();
   }
@@ -4732,6 +4755,43 @@
 
   // ── Persistence ──
   const STORAGE_KEY = 'shiftGraph_v1';
+  let autoImportBlockedUntil = 0;
+
+  function blockAutoImportBriefly() {
+    autoImportBlockedUntil = Date.now() + 45000;
+  }
+
+  function readPersistedPayload() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function applyPersistedPayload(data, opts) {
+    const options = opts || { rebuildFromRaw: true };
+    data = data || {};
+    Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
+    if (data.schedulesByDate) {
+      Object.entries(data.schedulesByDate).forEach(([date, shifts]) => {
+        schedulesByDate[date] = shifts.map(repairShiftTimes);
+      });
+    }
+    normalizeAllSchedules();
+    Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
+    if (data.requestsByDate) Object.assign(requestsByDate, data.requestsByDate);
+    Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
+    if (data.rowOrderByDate) Object.assign(rowOrderByDate, data.rowOrderByDate);
+    Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
+    if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
+    if (options.rebuildFromRaw) rebuildRequestsFromImportRaw();
+    else {
+      purgeOrphanRequests();
+      sanitizeRequests();
+    }
+  }
 
   function saveData() {
     try {
@@ -4746,22 +4806,7 @@
 
   function loadData() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      if (data.schedulesByDate) {
-        Object.entries(data.schedulesByDate).forEach(([date, shifts]) => {
-          schedulesByDate[date] = shifts.map(repairShiftTimes);
-        });
-      }
-      normalizeAllSchedules();
-      Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
-      if (data.requestsByDate) Object.assign(requestsByDate, data.requestsByDate);
-      Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
-      if (data.rowOrderByDate) Object.assign(rowOrderByDate, data.rowOrderByDate);
-      Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
-      if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
-      rebuildRequestsFromImportRaw();
+      applyPersistedPayload(readPersistedPayload(), { rebuildFromRaw: true });
     } catch(e) { console.warn('Load failed:', e); }
   }
 
@@ -4825,6 +4870,7 @@
 
     // Check for data sent from the browser extension
     function checkExtensionData() {
+      if (Date.now() < autoImportBlockedUntil) return;
       // Direct injection fallback
       if (window._sgPendingImport) {
         const data = window._sgPendingImport;
