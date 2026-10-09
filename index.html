@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-09b';
+  const BUILD_ID = 'count-2026-10-09c';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -1943,7 +1943,17 @@
         var action=(form&&(form.getAttribute('action')||form.action))||'/Views/WorksheetView/SelectWorksheetView';
         try{return new URL(action,location.href).href;}catch(e){return action;}
       }
-      async function selectPayPeriod(payPeriodId,fromDoc){
+      var ppFrame=null;
+      function ensurePPFrame(){
+        if(ppFrame&&ppFrame.parentNode) return ppFrame;
+        ppFrame=document.createElement('iframe');
+        ppFrame.name='sgPPFrame';
+        ppFrame.setAttribute('name','sgPPFrame');
+        ppFrame.style.cssText='position:fixed;width:1px;height:1px;left:-12000px;top:0;opacity:0;pointer-events:none';
+        document.body.appendChild(ppFrame);
+        return ppFrame;
+      }
+      function buildPayPeriodParams(payPeriodId,fromDoc){
         var doc=fromDoc||document;
         var form=worksheetForm(doc);
         var ppSel=payPeriodSelect(doc);
@@ -1960,16 +1970,65 @@
         if(ppSel&&ppSel.name) params.set(ppSel.name,String(payPeriodId));
         var area=doc.querySelector('select[name="AreaId"]');
         if(area&&area.value) params.set('AreaId',area.value);
-        var res=await fetch(formAction(form),{
-          method:'POST',
-          credentials:'same-origin',
-          headers:{'Content-Type':'application/x-www-form-urlencoded'},
-          body:params.toString(),
-          redirect:'follow'
+        return {form:form,params:params};
+      }
+      function waitFrameLoad(iframe,ms){
+        return new Promise(function(resolve,reject){
+          var done=false;
+          var timer=setTimeout(function(){
+            if(done) return;
+            done=true;
+            reject(new Error('Timed out loading pay period'));
+          },ms||25000);
+          function onLoad(){
+            if(done) return;
+            done=true;
+            clearTimeout(timer);
+            iframe.removeEventListener('load',onLoad);
+            resolve();
+          }
+          iframe.addEventListener('load',onLoad);
         });
-        if(!res.ok) throw new Error('HTTP '+res.status);
-        var nextDoc=new DOMParser().parseFromString(await res.text(),'text/html');
-        return nextDoc;
+      }
+      async function selectPayPeriod(payPeriodId,fromDoc){
+        var built=buildPayPeriodParams(payPeriodId,fromDoc);
+        var iframe=ensurePPFrame();
+        var tempForm=document.createElement('form');
+        tempForm.method='POST';
+        tempForm.action=formAction(built.form);
+        tempForm.target='sgPPFrame';
+        tempForm.style.display='none';
+        built.params.forEach(function(value,key){
+          var inp=document.createElement('input');
+          inp.type='hidden';
+          inp.name=key;
+          inp.value=value;
+          tempForm.appendChild(inp);
+        });
+        document.body.appendChild(tempForm);
+        var loadWait=waitFrameLoad(iframe,25000);
+        tempForm.submit();
+        tempForm.remove();
+        await loadWait;
+        await sleep(350);
+        try{
+          return iframe.contentDocument;
+        }catch(e){
+          throw new Error('Could not read pay period after switch');
+        }
+      }
+      async function fetchDayInFrame(day){
+        var iframe=ensurePPFrame();
+        var url=day.href||indexHref(day.dayNum);
+        var loadWait=waitFrameLoad(iframe,25000);
+        iframe.src=url;
+        await loadWait;
+        await sleep(180);
+        try{
+          return extractDayText(iframe.contentDocument);
+        }catch(e){
+          return null;
+        }
       }
       function dayUrlWithPayPeriod(day,payPeriodId){
         var url=day.href||indexHref(day.dayNum);
@@ -1994,33 +2053,18 @@
         for(var nd=1;nd<=14;nd++) nextDays.push({dayNum:nd,href:indexHref(nd),label:'Day '+nd});
         return nextDays;
       }
-      async function fetchedFirstDateKey(payPeriodId){
-        var probe={dayNum:1,href:indexHref(1),label:''};
-        var text=await fetchDay(probe,null,payPeriodId).catch(function(){return null;});
-        var dm=text&&String(text).match(/===DATE===\\s*\\n([^\\n]+)/);
-        return dm?dateKeyFromToken(dm[1]):null;
-      }
       async function openFollowingPayPeriod(nextPPId,lastCurrentKey){
         var nextDoc=await selectPayPeriod(nextPPId);
-        await sleep(500);
-        var firstKey=await fetchedFirstDateKey(nextPPId);
-        if(lastCurrentKey&&(!firstKey||firstKey<=lastCurrentKey)){
-          nextDoc=await selectPayPeriod(nextPPId);
-          await sleep(650);
-          firstKey=await fetchedFirstDateKey(nextPPId);
-        }
+        var probe={dayNum:1,href:indexHref(1),label:''};
+        var firstText=await fetchDayInFrame(probe);
+        var dm=firstText&&String(firstText).match(/===DATE===\\s*\\n([^\\n]+)/);
+        var firstKey=dm?dateKeyFromToken(dm[1]):null;
         if(lastCurrentKey&&(!firstKey||firstKey<=lastCurrentKey)){
           throw new Error('WMT stayed on the current pay period');
         }
         var nextDays=collectDays(nextDoc);
         if(!nextDays.length) nextDays=defaultNextDays();
-        await primePayPeriodFetches(nextDoc,nextDays);
-        return {nextDoc:nextDoc,nextDays:nextDays};
-      }
-      async function fetchDayAfterSwitch(day,payPeriodId){
-        await selectPayPeriod(payPeriodId);
-        await sleep(400);
-        return fetchDay(day,null,payPeriodId).catch(function(){return null;});
+        return {nextDoc:nextDoc,nextDays:nextDays,firstText:firstText};
       }
       async function buildCopyPlan(){
         var days=collectDays();
@@ -2192,33 +2236,30 @@
             var dm=String(part||'').match(/===DATE===\\s*\\n([^\\n]+)/);
             if(dm){var dk=dateKeyFromToken(dm[1]);if(dk) seenDates[dk]=true;}
           });
-          for(var n=nextStartAt;n<nextDays.length;n+=CONC){
-            if(!stillRun()){showToast('Copy cancelled — bookmark clicked again',1);return;}
-            await selectPayPeriod(built.nextPPId);
-            await sleep(450);
-            var nbatch=nextDays.slice(n,Math.min(n+CONC,nextDays.length));
-            showToast('Next PP: days '+(n+1)+'–'+(n+nbatch.length)+' of '+nextDays.length+'…','progress');
-            var nresults=await Promise.all(nbatch.map(function(day){
-              return fetchDay(day,null,built.nextPPId).catch(function(){return null;});
-            }));
-            for(var nb=0;nb<nresults.length;nb++){
-              var ntext=nresults[nb];
-              var dm2=ntext?ntext.match(/===DATE===\\s*\\n([^\\n]+)/):null;
-              var dk=dm2?dateKeyFromToken(dm2[1]):null;
-              if(!ntext||!dk||(lastCurrentKey&&dk<=lastCurrentKey)){
-                ntext=await fetchDayAfterSwitch(nbatch[nb],built.nextPPId);
-                dm2=ntext?ntext.match(/===DATE===\\s*\\n([^\\n]+)/):null;
-                dk=dm2?dateKeyFromToken(dm2[1]):null;
-              }
-              if(!ntext) continue;
-              if(dk&&lastCurrentKey&&dk<=lastCurrentKey) continue;
-              if(dk&&seenDates[dk]) continue;
-              if(dk) seenDates[dk]=true;
-              nextParts[n+nb]=ntext;
+          if(opened.firstText&&nextStartAt===0&&!nextParts[0]){
+            var dm0=opened.firstText.match(/===DATE===\\s*\\n([^\\n]+)/);
+            var dk0=dm0?dateKeyFromToken(dm0[1]):null;
+            if(dk0&&(!lastCurrentKey||dk0>lastCurrentKey)&&!seenDates[dk0]){
+              seenDates[dk0]=true;
+              nextParts[0]=opened.firstText;
               nextCopied++;
             }
-            saveJob(id,parts,plan.length,{ppId:built.ppId,nextPPId:built.nextPPId,nextParts:nextParts,nextDone:n+nbatch.length,nextTotal:nextDays.length});
-            if(n+nbatch.length<nextDays.length) await sleep(150);
+          }
+          if(nextStartAt===0&&nextParts[0]) nextStartAt=1;
+          for(var n=nextStartAt;n<nextDays.length;n++){
+            if(!stillRun()){showToast('Copy cancelled — bookmark clicked again',1);return;}
+            showToast('Next PP: day '+(n+1)+' of '+nextDays.length+'…','progress');
+            var ntext=await fetchDayInFrame(nextDays[n]);
+            var dm2=ntext?ntext.match(/===DATE===\\s*\\n([^\\n]+)/):null;
+            var dk=dm2?dateKeyFromToken(dm2[1]):null;
+            if(!ntext) continue;
+            if(dk&&lastCurrentKey&&dk<=lastCurrentKey) continue;
+            if(dk&&seenDates[dk]) continue;
+            if(dk) seenDates[dk]=true;
+            nextParts[n]=ntext;
+            nextCopied++;
+            saveJob(id,parts,plan.length,{ppId:built.ppId,nextPPId:built.nextPPId,nextParts:nextParts,nextDone:n+1,nextTotal:nextDays.length});
+            await sleep(200);
           }
           ready=ready.concat(compactParts(nextParts));
           if(nextCopied<=cachedNext.length) showToast('Next pay period had no new days to copy',1);
