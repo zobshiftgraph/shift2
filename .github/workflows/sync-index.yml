@@ -1,0 +1,34 @@
+# Keeps index.html (GitHub Pages) in sync when shiftgraph.html changes on main.
+name: Sync index.html
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'shiftgraph.html'
+      - 'scripts/sync-index.ps1'
+      - '.github/workflows/sync-index.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-index
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy shiftgraph.html to index.html
+        run: cp shiftgraph.html index.html
+
+      - name: Commit index.html if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: Sync index.html from shiftgraph.html
+          file_pattern: index.html
+          skip_fetch: true
