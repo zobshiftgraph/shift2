@@ -73,6 +73,83 @@
       background: var(--accent);
     }
 
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .main-menu-wrap {
+      position: relative;
+    }
+
+    .main-menu-panel {
+      display: none;
+      position: absolute;
+      left: 0;
+      top: calc(100% + 8px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      z-index: 200;
+      min-width: 320px;
+      max-width: min(420px, 92vw);
+      max-height: min(80vh, 640px);
+      overflow-y: auto;
+    }
+
+    .menu-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+
+    .menu-section + .menu-section {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .menu-settings-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .menu-settings-grid label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .menu-settings-grid input[type="number"] {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      outline: none;
+    }
+
+    .menu-settings-help {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.45;
+      margin-bottom: 10px;
+    }
+
     .header-controls {
       display: flex;
       align-items: center;
@@ -925,9 +1002,43 @@
 </div>
 
 <header>
-  <div class="logo">
-    <div class="logo-dot"></div>
-    Shift Graph
+  <div class="header-left">
+    <div class="main-menu-wrap">
+      <button class="btn btn-ghost" type="button" onclick="toggleMainMenu()" id="mainMenuToggle" title="Menu">☰ Menu</button>
+      <div id="mainMenu" class="main-menu-panel">
+        <div class="menu-section">
+          <div class="menu-section-title">Bookmarks</div>
+          <p class="bookmarklet-help" style="margin-bottom:10px;">Show the bar first: <strong>Ctrl+Shift+B</strong> (Chrome/Edge). Drag the link up — don&apos;t click it here.</p>
+          <div class="bookmarklet-box">
+            <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
+            <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
+            <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
+            <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
+            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
+            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
+          </div>
+        </div>
+        <div class="menu-section">
+          <div class="menu-section-title">Staffing targets</div>
+          <p class="menu-settings-help">Day/Eve counts in the chart header: green above target, black at target, yellow one under, red two or more under.</p>
+          <div class="menu-settings-grid">
+            <div>
+              <label for="staffTargetDay">Day target</label>
+              <input type="number" id="staffTargetDay" min="0" max="99" step="1" />
+            </div>
+            <div>
+              <label for="staffTargetEve">Eve target</label>
+              <input type="number" id="staffTargetEve" min="0" max="99" step="1" />
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary" style="width:100%;" onclick="applyStaffingTargetsFromMenu()" id="staffTargetApplyBtn">Apply targets</button>
+        </div>
+      </div>
+    </div>
+    <div class="logo">
+      <div class="logo-dot"></div>
+      Shift Graph
+    </div>
   </div>
   <div class="header-controls">
     <div style="flex-direction:row;align-items:center;gap:6px;display:flex;">
@@ -962,25 +1073,6 @@
             <button class="btn btn-primary" style="flex:1;" onclick="addShift()">Add</button>
             <button class="btn btn-ghost" onclick="toggleAddShift()">Cancel</button>
           </div>
-        </div>
-      </div>
-    </div>
-    <div style="position:relative;">
-      <button class="btn btn-ghost" onclick="toggleBookmarksMenu()" id="bookmarksToggle">🔖 Bookmarks</button>
-      <div id="bookmarksMenu" style="
-        display:none;position:absolute;right:0;top:calc(100% + 8px);
-        background:var(--surface);border:1px solid var(--border);border-radius:12px;
-        padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,0.12);z-index:100;min-width:300px;
-      ">
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:10px;">Drag link to bookmarks bar</div>
-        <p class="bookmarklet-help" style="margin-bottom:10px;">Show the bar first: <strong>Ctrl+Shift+B</strong> (Chrome/Edge). Drag the yellow/green link up — don&apos;t click it here.</p>
-        <div class="bookmarklet-box">
-          <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
-          <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
-          <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
-          <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
-          <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
-          <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
         </div>
       </div>
     </div>
@@ -1041,7 +1133,10 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-09h';
+  const BUILD_ID = 'count-2026-10-09i';
+
+  const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
+  let staffingTargets = { ...DEFAULT_STAFFING_TARGETS };
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -2441,9 +2536,50 @@
     }
   }
 
-  function toggleBookmarksMenu() {
-    const menu = document.getElementById('bookmarksMenu');
-    if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  function syncStaffingTargetInputs() {
+    const dayEl = document.getElementById('staffTargetDay');
+    const eveEl = document.getElementById('staffTargetEve');
+    if (dayEl) dayEl.value = String(staffingTargets.day ?? DEFAULT_STAFFING_TARGETS.day);
+    if (eveEl) eveEl.value = String(staffingTargets.eve ?? DEFAULT_STAFFING_TARGETS.eve);
+  }
+
+  function normalizeStaffingTargetValue(raw, fallback) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(99, Math.max(0, Math.round(n)));
+  }
+
+  function applyStaffingTargetsFromMenu() {
+    const dayEl = document.getElementById('staffTargetDay');
+    const eveEl = document.getElementById('staffTargetEve');
+    staffingTargets.day = normalizeStaffingTargetValue(dayEl?.value, DEFAULT_STAFFING_TARGETS.day);
+    staffingTargets.eve = normalizeStaffingTargetValue(eveEl?.value, DEFAULT_STAFFING_TARGETS.eve);
+    syncStaffingTargetInputs();
+    saveData();
+    render();
+    const btn = document.getElementById('staffTargetApplyBtn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '✓ Saved';
+      setTimeout(() => { btn.textContent = orig; }, 1600);
+    }
+  }
+
+  function staffingCountColor(count, target) {
+    const c = Number(count);
+    const t = Number(target);
+    if (c > t) return '#22a06b';
+    if (c === t) return 'var(--text)';
+    if (c === t - 1) return '#ca8a04';
+    return '#d94f6e';
+  }
+
+  function toggleMainMenu() {
+    const menu = document.getElementById('mainMenu');
+    if (!menu) return;
+    const open = menu.style.display !== 'block';
+    menu.style.display = open ? 'block' : 'none';
+    if (open) syncStaffingTargetInputs();
   }
 
   function showBookmarkletDialog(url) {
@@ -2492,10 +2628,10 @@
     if (dd && btn && dd.style.display === 'block' && !dd.contains(e.target) && !btn.contains(e.target)) {
       dd.style.display = 'none';
     }
-    const bmMenu = document.getElementById('bookmarksMenu');
-    const bmToggle = document.getElementById('bookmarksToggle');
-    if (bmMenu && bmToggle && bmMenu.style.display === 'block' && !bmMenu.contains(e.target) && !bmToggle.contains(e.target)) {
-      bmMenu.style.display = 'none';
+    const mainMenu = document.getElementById('mainMenu');
+    const mainMenuToggle = document.getElementById('mainMenuToggle');
+    if (mainMenu && mainMenuToggle && mainMenu.style.display === 'block' && !mainMenu.contains(e.target) && !mainMenuToggle.contains(e.target)) {
+      mainMenu.style.display = 'none';
     }
   });
 
@@ -4352,34 +4488,8 @@
     const dayCount = shifts.filter(s => !s.dev && !s.cic && s.end >= 12 && s.end < 19).length;
     const eveCount = shifts.filter(s => !s.dev && !s.cic && s.end >= 19 && s.end <= 24).length;
 
-    // Determine day of week for threshold rules
-    const dow = new Date(activeDate + 'T12:00:00').getDay(); // 0=Sun, 1=Mon...6=Sat
-    const isSat = dow === 6;
-    const isSun = dow === 0;
-    const isWeekend = isSat || isSun;
-
-    // Threshold rules:
-    // Mon-Fri day & eve: green>=10, yellow=8-9, red<=7  (wait — re-read: yellow=8, green>=10, red<=7)
-    // Sat day & eve:     green>=9,  yellow=7,   red<=6
-    // Sun day:           green>=9,  yellow=7,   red<=6  (same as Sat)
-    // Sun eve:           green>=10, yellow=8,   red<=7  (same as Mon-Fri)
-
-    function staffColor(count, isWeekendRules) {
-      if (isWeekendRules) {
-        if (count >= 8)  return '#22a06b'; // green
-        return '#d94f6e';                  // red
-      } else {
-        if (count >= 9) return '#22a06b';  // green
-        if (count === 8) return 'var(--text)'; // neutral
-        return '#d94f6e';                  // red
-      }
-    }
-
-    const dayWeekendRules = isSat; // Saturday only
-    const eveWeekendRules = isSat;
-
-    const dayColor = staffColor(dayCount, dayWeekendRules);
-    const eveColor = staffColor(eveCount, eveWeekendRules);
+    const dayColor = staffingCountColor(dayCount, staffingTargets.day ?? DEFAULT_STAFFING_TARGETS.day);
+    const eveColor = staffingCountColor(eveCount, staffingTargets.eve ?? DEFAULT_STAFFING_TARGETS.eve);
 
     const dateLabel = formatDateLabel(activeDate);
     document.getElementById('chartSubtitle').innerHTML =
@@ -4791,6 +4901,12 @@
       purgeOrphanRequests();
       sanitizeRequests();
     }
+    if (data.staffingTargets && typeof data.staffingTargets === 'object') {
+      staffingTargets = {
+        day: normalizeStaffingTargetValue(data.staffingTargets.day, DEFAULT_STAFFING_TARGETS.day),
+        eve: normalizeStaffingTargetValue(data.staffingTargets.eve, DEFAULT_STAFFING_TARGETS.eve),
+      };
+    }
   }
 
   function saveData() {
@@ -4799,7 +4915,8 @@
         schedulesByDate,
         requestsByDate,
         rowOrderByDate,
-        importRawByDate
+        importRawByDate,
+        staffingTargets
       }));
     } catch(e) { console.warn('Save failed:', e); }
   }
@@ -4838,6 +4955,7 @@
   window.pasteSchedule = pasteSchedule;
   (function init() {
     loadData();
+    syncStaffingTargetInputs();
     initBookmarkletLinks();
     console.info('Shift Graph build:', BUILD_ID);
     updateUndoRedoBtns();
