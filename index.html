@@ -1041,7 +1041,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-09f';
+  const BUILD_ID = 'count-2026-10-09g';
 
   // ── Data ──
   // schedulesByDate: { 'YYYY-MM-DD': [shift, ...], ... }
@@ -3125,13 +3125,17 @@
   function rebuildRequestsFromImportRaw() {
     Object.entries(importRawByDate).forEach(([date, raw]) => {
       if (!raw || !raw.includes('===REQUESTS_START===')) return;
-      if (!(schedulesByDate[date] || []).length) return;
+      if (!(schedulesByDate[date] || []).length) {
+        delete requestsByDate[date];
+        return;
+      }
       const { requests: parsedReqs } = parseRequests(raw, date);
       const panelRows = getRequestsForPanel(date);
       if (panelRows.length === 0 && parsedReqs.length > 0) {
         requestsByDate[date] = mergeRequestsWithResolved(date, parsedReqs);
       }
     });
+    purgeOrphanRequests();
     sanitizeRequests();
   }
 
@@ -3839,6 +3843,12 @@
     renderRequests();
   }
 
+  function purgeOrphanRequests() {
+    Object.keys(requestsByDate).forEach(date => {
+      if (!(schedulesByDate[date] || []).length) delete requestsByDate[date];
+    });
+  }
+
   function clearAllStoredDays() {
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
     Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
@@ -3846,6 +3856,7 @@
     Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
     previewReqIds.clear();
     wxInitials.clear();
+    purgeOrphanRequests();
   }
 
   /** Undo snapshot, then wipe schedules + requests before a full replace import. */
@@ -3858,17 +3869,22 @@
     if (!confirm('Clear all schedules and requests for every day?')) return;
     snapshot('Clear all days');
     clearAllStoredDays();
+    saveData();
     render();
     renderRequests();
   }
 
   function clearAll() {
     const d = getActiveDate();
-    if (!(schedulesByDate[d] || []).length || confirm(`Clear all shifts for ${d}?`)) {
-      snapshot(`Clear ${d}`);
-      delete schedulesByDate[d];
-      render();
-    }
+    if ((schedulesByDate[d] || []).length && !confirm(`Clear all shifts and requests for ${d}?`)) return;
+    snapshot(`Clear ${d}`);
+    (requestsByDate[d] || []).forEach(r => previewReqIds.delete(String(r.id)));
+    delete schedulesByDate[d];
+    delete requestsByDate[d];
+    delete importRawByDate[d];
+    delete rowOrderByDate[d];
+    render();
+    renderRequests();
   }
 
   // ── Overlap counting ──
@@ -4295,6 +4311,7 @@
 
   function render() {
     normalizeAllSchedules();
+    purgeOrphanRequests();
     const container = document.getElementById('timelineContainer');
     const empty = document.getElementById('emptyState');
     const activeDate = getActiveDate();
@@ -4304,6 +4321,7 @@
       container.innerHTML = '';
       container.appendChild(empty);
       document.getElementById('chartSubtitle').textContent = 'No shifts scheduled for this date';
+      renderRequests();
       return;
     }
 
@@ -4737,9 +4755,11 @@
         });
       }
       normalizeAllSchedules();
-      if (data.requestsByDate)  Object.assign(requestsByDate,  data.requestsByDate);
-      sanitizeRequests();
-      if (data.rowOrderByDate)  Object.assign(rowOrderByDate,  data.rowOrderByDate);
+      Object.keys(requestsByDate).forEach(k => delete requestsByDate[k]);
+      if (data.requestsByDate) Object.assign(requestsByDate, data.requestsByDate);
+      Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
+      if (data.rowOrderByDate) Object.assign(rowOrderByDate, data.rowOrderByDate);
+      Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
       if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
       rebuildRequestsFromImportRaw();
     } catch(e) { console.warn('Load failed:', e); }
