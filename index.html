@@ -2511,21 +2511,36 @@
           }
           if(nextStartAt===0&&nextParts[0]) nextStartAt=1;
           var nextPPId=opened.nextPPId||built.nextPPId;
-          for(var n=nextStartAt;n<nextDays.length;n++){
+          for(var n=0;n<nextDays.length;n+=CONC){
             if(!stillRun()){showToast('Copy cancelled — bookmark clicked again',1);return;}
-            if(n>0&&(n===1||n%4===0)) await selectPayPeriod(nextPPId);
-            showToast('Next PP: day '+(n+1)+' of '+nextDays.length+'…','progress');
-            var ntext=await fetchDay(nextDays[n],null,nextPPId,nextDays[n].selectDate||null);
-            var dm2=ntext?ntext.match(/===DATE===\\s*\\n([^\\n]+)/):null;
-            var dk=dm2?dateKeyFromToken(dm2[1]):null;
-            if(!ntext) continue;
-            if(dk&&lastCurrentKey&&dk<=lastCurrentKey) continue;
-            if(dk&&seenDates[dk]) continue;
-            if(dk) seenDates[dk]=true;
-            nextParts[n]=ntext;
-            nextCopied++;
-            saveJob(id,parts,plan.length,{ppId:built.ppId,nextPPId:built.nextPPId,nextParts:nextParts,nextDone:n+1,nextTotal:nextDays.length});
-            await sleep(220);
+            var nEnd=Math.min(n+CONC,nextDays.length);
+            var pending=[];
+            for(var pi=n;pi<nEnd;pi++){
+              if(nextParts[pi]) continue;
+              pending.push({idx:pi,day:nextDays[pi]});
+            }
+            if(!pending.length){
+              saveJob(id,parts,plan.length,{ppId:built.ppId,nextPPId:built.nextPPId,nextParts:nextParts,nextDone:nEnd,nextTotal:nextDays.length});
+              continue;
+            }
+            await selectPayPeriod(nextPPId);
+            showToast('Next PP: days '+(n+1)+'–'+nEnd+' of '+nextDays.length+'…','progress');
+            var nresults=await Promise.all(pending.map(function(item){
+              return fetchDay(item.day,null,nextPPId,item.day.selectDate||null).catch(function(){return null;});
+            }));
+            for(var nb=0;nb<nresults.length;nb++){
+              var ntext=nresults[nb];
+              var dm2=ntext?ntext.match(/===DATE===\\s*\\n([^\\n]+)/):null;
+              var dk=dm2?dateKeyFromToken(dm2[1]):null;
+              if(!ntext) continue;
+              if(dk&&lastCurrentKey&&dk<=lastCurrentKey) continue;
+              if(dk&&seenDates[dk]) continue;
+              if(dk) seenDates[dk]=true;
+              nextParts[pending[nb].idx]=ntext;
+              nextCopied++;
+            }
+            saveJob(id,parts,plan.length,{ppId:built.ppId,nextPPId:built.nextPPId,nextParts:nextParts,nextDone:nEnd,nextTotal:nextDays.length});
+            if(nEnd<nextDays.length) await sleep(120);
           }
           ready=ready.concat(compactParts(nextParts));
           if(nextCopied<=cachedNext.length) showToast('Next pay period had no new days to copy',1);
