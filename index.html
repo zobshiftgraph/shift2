@@ -3509,6 +3509,7 @@
 
   function getPartialLeaveRequests(reqs, onLeave, previewReqs = []) {
     const approved = reqs.filter(r =>
+      !r._leaveRemoved &&
       !isShiftChangeType(r.type) &&
       !isTOSType(r.type) &&
       r.isLeave && r.isPartial &&
@@ -4375,6 +4376,7 @@
         let yellowInner = '';
         if (!shift.dev && !shift.cic && shift.end <= 21 && shift.end > shift.start) {
           const hasLeaveAtEnd = (requestsByDate[date] || []).some(r =>
+            !r._leaveRemoved &&
             r.cpc === name && r.lvEnd != null && r.lvStart != null &&
             (r.status === 'approved-partial' || r.resolvedAction === 'approve') &&
             r.isPartial && r.lvEnd >= shift.end - 0.01
@@ -4395,11 +4397,13 @@
 
         // Grey LV overlay — approved-partial from import, manually approved partial leave, or previewed
         const partialLeaves = (requestsByDate[date] || []).filter(r => {
+          if (r._leaveRemoved) return false;
           if (isShiftChangeType(r.type) || isTOSType(r.type) || !r.isPartial || r.cpc !== name) return false;
           const isApproved = r.status === 'approved-partial' || (r.resolvedAction === 'approve' && r.isPartial);
           const isPreviewed = previewReqIds.has(String(r.id));
           if (!isApproved && !isPreviewed) return false;
-          // Ensure lvStart/lvEnd are populated (may need to parse from from/to)
+          // Ensure lvStart/lvEnd are populated (may need to parse from from/to).
+          // Do not refill times after leave was removed — that put the grey shade back.
           if (r.lvStart == null) r.lvStart = parseTimeStr(r.from);
           if (r.lvEnd   == null) r.lvEnd   = parseTimeStr(r.to);
           return r.lvStart != null && r.lvEnd != null;
