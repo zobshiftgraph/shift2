@@ -939,12 +939,11 @@
         <input type="number" id="modalDuration" value="8" min="1" max="14" step="0.5"
           style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:14px;padding:7px 10px;border-radius:8px;outline:none;text-align:center;"/>
       </div>
-      <button class="btn btn-primary" style="padding:7px 14px;font-size:13px;white-space:nowrap;" onclick="applyModalShiftTime()">Apply</button>
     </div>
 
     <!-- Trainee staffing toggle -->
     <div id="modalStaffingCheck" style="display:none;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
-      <input type="checkbox" id="countForStaffingCb" onchange="toggleCountForStaffing()" style="width:16px;height:16px;cursor:pointer;accent-color:#5b9bd5;"/>
+      <input type="checkbox" id="countForStaffingCb" style="width:16px;height:16px;cursor:pointer;accent-color:#5b9bd5;"/>
       <label for="countForStaffingCb" style="font-size:13px;font-weight:600;cursor:pointer;user-select:none;">Count for staffing</label>
     </div>
 
@@ -1010,6 +1009,11 @@
         </div>
       </div>
       <div id="modalTOSList" style="display:flex;flex-direction:column;gap:5px;"></div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
+      <button type="button" class="btn btn-ghost" onclick="cancelShiftModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" onclick="confirmShiftModal()">OK</button>
     </div>
   </div>
 </div>
@@ -1346,7 +1350,10 @@
     restoreAppState(snap);
     render();
     renderRequests();
-    if (_modalShiftId) _renderShiftModal();
+    if (_modalShiftId) {
+      if (_beginModalDraft()) _renderShiftModal();
+      else hideShiftModal();
+    }
     updateUndoRedoBtns();
   }
 
@@ -4610,7 +4617,81 @@
   });
 
   // ── Shift detail modal ──
-  let _modalShiftId = null; // track currently open shift
+  // Edits stay in _modalDraft until OK. Cancel, Escape, and the backdrop discard them.
+  let _modalShiftId = null;
+  let _modalDraft = null;
+
+  function cloneModalData(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function modalLeaveRequests(date, name) {
+    return (requestsByDate[date] || []).filter(r =>
+      r.cpc === name && (
+        (r.lvStart != null && r.lvEnd != null) ||
+        (r._lvStartOrig != null && r._lvEndOrig != null)
+      )
+    );
+  }
+
+  function modalTosSignature(list) {
+    return JSON.stringify((list || []).map(t => ({
+      id: t.id, from: t.from, to: t.to, type: t.type || '',
+      tosStart: t.tosStart, tosEnd: t.tosEnd, removed: !!t.removed
+    })));
+  }
+
+  function modalEditSignature(shift, leaves) {
+    return JSON.stringify({
+      start: shift.start,
+      end: shift.end,
+      opsStart: shift.opsStart ?? null,
+      opsEnd: shift.opsEnd ?? null,
+      countForStaffing: !!shift.countForStaffing,
+      tos: modalTosSignature(shift.tosList),
+      leaves: leaves.map(r => ({
+        id: r.id, type: r.type, from: r.from, to: r.to,
+        lvStart: r.lvStart ?? null, lvEnd: r.lvEnd ?? null,
+        _leaveRemoved: !!r._leaveRemoved,
+        _lvStartOrig: r._lvStartOrig ?? null,
+        _lvEndOrig: r._lvEndOrig ?? null,
+        status: r.status, resolvedAction: r.resolvedAction
+      }))
+    });
+  }
+
+  function _beginModalDraft() {
+    const date = getActiveDate();
+    const shift = (schedulesByDate[date] || []).find(s => String(s.id) === String(_modalShiftId));
+    if (!shift) {
+      _modalDraft = null;
+      return null;
+    }
+    const draftShift = cloneModalData(shift);
+    const draftLeaves = cloneModalData(modalLeaveRequests(date, shift.name));
+    const startH = Math.floor(draftShift.start % 24);
+    const startM = Math.round((draftShift.start % 1) * 60);
+    _modalDraft = {
+      date,
+      shift: draftShift,
+      leaves: draftLeaves,
+      originalShift: cloneModalData(draftShift),
+      originalLeaves: cloneModalData(draftLeaves),
+      timeStart: String(startH).padStart(2, '0') + String(startM).padStart(2, '0'),
+      timeDur: draftShift.end - draftShift.start
+    };
+    return _modalDraft;
+  }
+
+  function readModalTimeInputs() {
+    const startRaw = document.getElementById('modalStartTime').value.trim();
+    const dur = parseFloat(document.getElementById('modalDuration').value);
+    const m = startRaw.match(/^(\d{1,2}):?(\d{2})$/);
+    if (!m) { alert('Enter start time as HHMM, e.g. 0700'); return null; }
+    if (isNaN(dur) || dur <= 0 || dur > 14) { alert('Duration must be between 1 and 14 hours.'); return null; }
+    const start = parseInt(m[1], 10) + parseInt(m[2], 10) / 60;
+    return { start, end: start + dur };
+  }
 
   function toggleAddForm(id) {
     const el = document.getElementById(id);
@@ -4633,63 +4714,23 @@
     }
   }
 
-  function toggleCountForStaffing() {
-    const cb = document.getElementById('countForStaffingCb');
-    const allShifts = getActiveShifts();
-    const shift = allShifts.find(s => String(s.id) === String(_modalShiftId));
-    if (!shift) return;
-    snapshot(`${cb.checked ? 'Include' : 'Exclude'} ${shift.name} from staffing`);
-    shift.countForStaffing = cb.checked;
-    render();
-    renderRequests();
-  }
-
-  function applyModalShiftTime() {
-    const shiftId = _modalShiftId;
-    const date = getActiveDate();
-    const shifts = schedulesByDate[date] || [];
-    const shift = shifts.find(s => String(s.id) === String(shiftId));
-    if (!shift) return;
-
-    const startRaw = document.getElementById('modalStartTime').value.trim();
-    const dur = parseFloat(document.getElementById('modalDuration').value);
-
-    // Parse HHMM start time
-    const m = startRaw.match(/^(\d{1,2}):?(\d{2})$/);
-    if (!m) { alert('Enter start time as HHMM, e.g. 0700'); return; }
-    if (isNaN(dur) || dur <= 0 || dur > 14) { alert('Duration must be between 1 and 14 hours.'); return; }
-
-    snapshot(`Edit shift ${shift.name}`);
-
-    const newStart = parseInt(m[1]) + parseInt(m[2]) / 60;
-    const newEnd   = newStart + dur;
-
-    shift.start = newStart;
-    shift.end   = newEnd;
-    shift.opsStart = newStart;
-    shift.opsEnd   = newEnd;
-    const repaired = repairShiftTimes(shift);
-    Object.assign(shift, repaired);
-
-    refreshRowOrder(date);
-    render();
-    closeShiftModal();
-  }
-
   function openShiftModal(shiftId, e) {
     if (e) e.stopPropagation();
     hideTip();
     _modalShiftId = String(shiftId);
+    if (!_beginModalDraft()) return;
     _renderShiftModal();
     document.getElementById('shiftModal').style.display = 'flex';
   }
 
-  function _renderShiftModal() {
-    const shiftId = _modalShiftId;
-    const date = getActiveDate();
-    const allShifts = getActiveShifts();
-    const shift = allShifts.find(s => String(s.id) === String(shiftId));
-    if (!shift) return;
+  function _renderShiftModal(opts) {
+    const fillFields = !opts || opts.fillFields !== false;
+    const resetForms = !opts || opts.resetForms !== false;
+    if (!_modalDraft && !_beginModalDraft()) return;
+    const draft = _modalDraft;
+    const shift = draft.shift;
+    const shiftId = shift.id;
+    const date = draft.date;
     const name = shift.name;
 
     // Basic info
@@ -4700,19 +4741,16 @@
     const typeTag  = shift.cic ? ' · CIC' : shift.dev ? ' · Trainee' : '';
     document.getElementById('modalMeta').textContent = `${startStr}–${endStr}  (${durStr})${typeTag}`;
 
-    // Populate shift time edit fields
-    const startH = Math.floor(shift.start % 24);
-    const startM = Math.round((shift.start % 1) * 60);
-    document.getElementById('modalStartTime').value = String(startH).padStart(2,'0') + String(startM).padStart(2,'0');
-    document.getElementById('modalDuration').value = shift.end - shift.start;
-
-    // Trainee staffing checkbox
-    const staffingEl = document.getElementById('modalStaffingCheck');
-    if (shift.dev) {
-      staffingEl.style.display = 'flex';
-      document.getElementById('countForStaffingCb').checked = !!shift.countForStaffing;
-    } else {
-      staffingEl.style.display = 'none';
+    if (fillFields) {
+      document.getElementById('modalStartTime').value = draft.timeStart;
+      document.getElementById('modalDuration').value = draft.timeDur;
+      const staffingEl = document.getElementById('modalStaffingCheck');
+      if (shift.dev) {
+        staffingEl.style.display = 'flex';
+        document.getElementById('countForStaffingCb').checked = !!shift.countForStaffing;
+      } else {
+        staffingEl.style.display = 'none';
+      }
     }
 
     // Gap info
@@ -4750,14 +4788,7 @@
       gapsEl.style.display = 'none';
     }
 
-    // Leave items — show all with leave times (pasted or manually added, active or removed)
-    const allReqs = requestsByDate[date] || [];
-    const leaveItems = allReqs.filter(r =>
-      r.cpc === name && (
-        (r.lvStart != null && r.lvEnd != null) ||    // active leave
-        (r._lvStartOrig != null && r._lvEndOrig != null) // removed leave (still has orig)
-      )
-    );
+    const leaveItems = draft.leaves;
     const leaveList = document.getElementById('modalLeaveList');
     leaveList.innerHTML = leaveItems.map(lv => {
       const isRemoved = lv._leaveRemoved === true;
@@ -4787,26 +4818,102 @@
       </div>`;
     }).join('');
 
-    // Reset add forms
-    ['addLeaveForm','addTOSForm'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.style.display = 'none';
-    });
+    if (resetForms) {
+      ['addLeaveForm','addTOSForm'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+    }
+  }
+
+  function hideShiftModal() {
+    const modal = document.getElementById('shiftModal');
+    if (modal) modal.style.display = 'none';
+    _modalShiftId = null;
+    _modalDraft = null;
+  }
+
+  function cancelShiftModal() {
+    hideShiftModal();
   }
 
   function closeShiftModal(e) {
     if (e && e.target !== document.getElementById('shiftModal')) return;
-    document.getElementById('shiftModal').style.display = 'none';
-    _modalShiftId = null;
+    cancelShiftModal();
+  }
+
+  function confirmShiftModal() {
+    const draft = _modalDraft;
+    if (!draft || _modalShiftId == null) return;
+    const real = (schedulesByDate[draft.date] || []).find(s => String(s.id) === String(_modalShiftId));
+    if (!real) { hideShiftModal(); return; }
+
+    const startRaw = document.getElementById('modalStartTime').value.trim();
+    const dur = parseFloat(document.getElementById('modalDuration').value);
+    const timeChanged = startRaw !== draft.timeStart || dur !== draft.timeDur;
+    let next = cloneModalData(draft.shift);
+    if (timeChanged) {
+      const parsed = readModalTimeInputs();
+      if (!parsed) return;
+      next.start = parsed.start;
+      next.end = parsed.end;
+      next.opsStart = parsed.start;
+      next.opsEnd = parsed.end;
+      next = repairShiftTimes(next);
+    } else {
+      next.start = draft.originalShift.start;
+      next.end = draft.originalShift.end;
+      next.opsStart = draft.originalShift.opsStart;
+      next.opsEnd = draft.originalShift.opsEnd;
+    }
+    if (draft.originalShift.dev) {
+      next.countForStaffing = document.getElementById('countForStaffingCb').checked;
+    }
+
+    const changed = modalEditSignature(next, draft.leaves) !== modalEditSignature(draft.originalShift, draft.originalLeaves);
+    if (!changed) { hideShiftModal(); return; }
+
+    snapshot(`Edit shift – ${real.name}`);
+    real.start = next.start;
+    real.end = next.end;
+    real.opsStart = next.opsStart;
+    real.opsEnd = next.opsEnd;
+    if (next.tosList) {
+      real.tosList = cloneModalData(next.tosList);
+      real.tosList.forEach(t => { delete t._draftNew; });
+    }
+    if (real.dev) real.countForStaffing = !!next.countForStaffing;
+
+    if (!requestsByDate[draft.date]) requestsByDate[draft.date] = [];
+    const reqs = requestsByDate[draft.date];
+    draft.leaves.forEach(lv => {
+      const copy = cloneModalData(lv);
+      delete copy._draftNew;
+      const existing = reqs.find(r => String(r.id) === String(lv.id));
+      if (existing) Object.assign(existing, copy);
+      else reqs.push(copy);
+    });
+
+    const scheduleChanged = timeChanged || modalTosSignature(next.tosList) !== modalTosSignature(draft.originalShift.tosList);
+    if (scheduleChanged) refreshRowOrder(draft.date);
+    hideShiftModal();
+    render();
+    renderRequests();
+  }
+
+  function refreshModalLists() {
+    _renderShiftModal({ fillFields: false, resetForms: false });
   }
 
   function removeLeaveFromModal(leaveId) {
-    const date = getActiveDate();
-    const reqs = requestsByDate[date] || [];
-    const req = reqs.find(r => String(r.id) === String(leaveId));
-    if (req) {
-      snapshot(`Remove leave – ${req.cpc}`);
-      // Preserve originals before nulling (handles both pasted and manually-added leave)
+    const draft = _modalDraft;
+    if (!draft) return;
+    const idx = draft.leaves.findIndex(r => String(r.id) === String(leaveId));
+    if (idx < 0) return;
+    const req = draft.leaves[idx];
+    if (req._draftNew) {
+      draft.leaves.splice(idx, 1);
+    } else {
       req._lvStartOrig = req._lvStartOrig ?? req.lvStart;
       req._lvEndOrig   = req._lvEndOrig   ?? req.lvEnd;
       req._leaveRemoved = true;
@@ -4814,57 +4921,39 @@
       req.lvEnd   = null;
       req.resolvedAction = 'deny';
     }
-    render();
-    renderRequests();
-    _renderShiftModal();
+    refreshModalLists();
   }
 
   function readLeaveFromModal(leaveId) {
-    const date = getActiveDate();
-    const reqs = requestsByDate[date] || [];
-    const req = reqs.find(r => String(r.id) === String(leaveId));
+    const draft = _modalDraft;
+    if (!draft) return;
+    const req = draft.leaves.find(r => String(r.id) === String(leaveId));
     if (req) {
-      snapshot(`Re-add leave – ${req.cpc}`);
       req.lvStart = req._lvStartOrig;
       req.lvEnd   = req._lvEndOrig;
       req._leaveRemoved = false;
       req.resolvedAction = 'approve';
       req.status = 'approved-partial';
     }
-    render();
-    renderRequests();
-    _renderShiftModal();
+    refreshModalLists();
   }
 
   function removeTOSFromModal(tosId) {
-    const shift = _getModalShift();
-    if (!shift || !shift.tosList) return;
-    const tos = shift.tosList.find(t => String(t.id) === String(tosId));
-    if (tos) {
-      snapshot(`Remove TOS – ${shift.name}`);
-      tos.removed = true;
-    }
-    refreshRowOrder(getActiveDate());
-    render();
-    _renderShiftModal();
+    const draft = _modalDraft;
+    if (!draft || !draft.shift.tosList) return;
+    const idx = draft.shift.tosList.findIndex(t => String(t.id) === String(tosId));
+    if (idx < 0) return;
+    if (draft.shift.tosList[idx]._draftNew) draft.shift.tosList.splice(idx, 1);
+    else draft.shift.tosList[idx].removed = true;
+    refreshModalLists();
   }
 
   function readdTOSFromModal(tosId) {
-    const shift = _getModalShift();
-    if (!shift || !shift.tosList) return;
-    const tos = shift.tosList.find(t => String(t.id) === String(tosId));
-    if (tos) {
-      snapshot(`Re-add TOS – ${shift.name}`);
-      tos.removed = false;
-    }
-    refreshRowOrder(getActiveDate());
-    render();
-    _renderShiftModal();
-  }
-
-  function _getModalShift() {
-    const allShifts = getActiveShifts();
-    return allShifts.find(s => String(s.id) === String(_modalShiftId)) || null;
+    const draft = _modalDraft;
+    if (!draft || !draft.shift.tosList) return;
+    const tos = draft.shift.tosList.find(t => String(t.id) === String(tosId));
+    if (tos) tos.removed = false;
+    refreshModalLists();
   }
 
   function parseTimeRange(str) {
@@ -4879,11 +4968,8 @@
   }
 
   function confirmAddLeave() {
-    const date = getActiveDate();
-    const shiftId = _modalShiftId;
-    const allShifts = getActiveShifts();
-    const shift = allShifts.find(s => String(s.id) === String(shiftId));
-    if (!shift) return;
+    const draft = _modalDraft;
+    if (!draft) return;
 
     const rangeVal = document.getElementById('addLeaveRange').value.trim();
     const type     = document.getElementById('addLeaveType').value;
@@ -4892,12 +4978,9 @@
     const { start: lvStart, end: lvEnd } = range;
     if (lvEnd <= lvStart) { alert('End must be after start.'); return; }
 
-    snapshot(`Add leave – ${shift.name}`);
-
-    if (!requestsByDate[date]) requestsByDate[date] = [];
-    requestsByDate[date].push({
+    draft.leaves.push({
       id: Date.now() + Math.random(),
-      cpc: shift.name,
+      cpc: draft.shift.name,
       type,
       from: rangeVal.split(/[-–]/)[0].trim(),
       to:   rangeVal.split(/[-–]/)[1].trim(),
@@ -4908,19 +4991,18 @@
       lvStart, lvEnd,
       _lvStartOrig: lvStart,
       _lvEndOrig: lvEnd,
-      _leaveRemoved: false
+      _leaveRemoved: false,
+      _draftNew: true
     });
 
-    render();
-    renderRequests();
-    closeShiftModal();
+    document.getElementById('addLeaveRange').value = '';
+    document.getElementById('addLeaveForm').style.display = 'none';
+    refreshModalLists();
   }
 
   function confirmAddTOS() {
-    const shiftId = _modalShiftId;
-    const allShifts = getActiveShifts();
-    const shift = allShifts.find(s => String(s.id) === String(shiftId));
-    if (!shift) return;
+    const draft = _modalDraft;
+    if (!draft) return;
 
     const rangeVal = document.getElementById('addTOSRange').value.trim();
     const range = parseTimeRange(rangeVal);
@@ -4928,20 +5010,19 @@
     const { start: tosStart, end: tosEnd } = range;
     if (tosEnd <= tosStart) { alert('End must be after start.'); return; }
 
-    snapshot(`Add TOS – ${shift.name}`);
-
-    if (!shift.tosList) shift.tosList = [];
-    shift.tosList.push({
+    if (!draft.shift.tosList) draft.shift.tosList = [];
+    draft.shift.tosList.push({
       id: Date.now() + Math.random(),
       from: rangeVal.split(/[-–]/)[0].trim(),
       to:   rangeVal.split(/[-–]/)[1].trim(),
       tosStart, tosEnd,
-      removed: false
+      removed: false,
+      _draftNew: true
     });
 
-    refreshRowOrder(getActiveDate());
-    render();
-    closeShiftModal();
+    document.getElementById('addTOSRange').value = '';
+    document.getElementById('addTOSForm').style.display = 'none';
+    refreshModalLists();
   }
 
   // ── Persistence ──
@@ -5046,6 +5127,11 @@
     renderRequests();
 
     document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && document.getElementById('shiftModal').style.display === 'flex') {
+        e.preventDefault();
+        cancelShiftModal();
+        return;
+      }
       if (e.target.matches('input, textarea, select')) return;
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
