@@ -991,6 +991,25 @@
       <div id="modalLeaveList" style="display:flex;flex-direction:column;gap:5px;"></div>
     </div>
 
+    <!-- Other Duties section -->
+    <div id="modalODSection" style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);">Other Duties</div>
+        <button class="modal-item-add" onclick="toggleAddForm('addODForm')">+ Add Other Duties</button>
+      </div>
+      <div id="addODForm" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
+        <div style="margin-bottom:8px;">
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;font-family:var(--font-mono);">TIME RANGE (e.g. 1200-1300)</div>
+          <input type="text" id="addODRange" placeholder="1200-1300" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:12px;padding:5px 8px;border-radius:6px;outline:none;"/>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-primary" style="font-size:12px;padding:5px 12px;" onclick="confirmAddOD()">Add</button>
+          <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;" onclick="toggleAddForm('addODForm')">Cancel</button>
+        </div>
+      </div>
+      <div id="modalODList" style="display:flex;flex-direction:column;gap:5px;"></div>
+    </div>
+
     <!-- TOS section -->
     <div id="modalTOSSection" style="margin-bottom:4px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -1152,7 +1171,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-09j';
+  const BUILD_ID = 'count-2026-10-17b';
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
   let staffingTargetsByDow = defaultStaffingTargetsByDow();
@@ -3302,17 +3321,38 @@
     return `${r.cpc}|${r.type}|${r.from}|${r.to}`;
   }
 
+  function isPersistedBarLeave(r) {
+    return !!(
+      r &&
+      !isShiftChangeType(r.type) &&
+      !isTOSType(r.type) &&
+      r.isPartial &&
+      (r.isLeave || r.status === 'approved-partial' || r._leaveRemoved) &&
+      (r._manual || r.lvStart != null || r.lvEnd != null || r._lvStartOrig != null || r._leaveRemoved)
+    );
+  }
+
   function mergeRequestsWithResolved(date, parsedReqs) {
     const existing = requestsByDate[date] || [];
     const resolvedByKey = new Map();
     const extras = [];
+    const manualKeys = new Set();
     existing.forEach(r => {
-      if (r.resolvedAction) resolvedByKey.set(requestMatchKey(r), r);
-      else if (!parsedReqs.some(p => requestMatchKey(p) === requestMatchKey(r))) extras.push(r);
+      const key = requestMatchKey(r);
+      const matchesParsed = parsedReqs.some(p => requestMatchKey(p) === key);
+      // Leave typed on a bar is not in the worksheet. Keep it when requests are rebuilt.
+      if (r._manual || (isPersistedBarLeave(r) && !matchesParsed)) {
+        extras.push(r);
+        manualKeys.add(key);
+        return;
+      }
+      if (r.resolvedAction) resolvedByKey.set(key, r);
+      else if (!matchesParsed) extras.push(r);
     });
-    const merged = parsedReqs.map(r => {
+    const merged = parsedReqs.filter(r => !manualKeys.has(requestMatchKey(r))).map(r => {
       const prev = resolvedByKey.get(requestMatchKey(r));
       if (!prev) return r;
+      const removed = !!prev._leaveRemoved;
       return {
         ...r,
         resolvedAction: prev.resolvedAction,
@@ -3322,8 +3362,11 @@
         _origEnd: prev._origEnd,
         _origOpsStart: prev._origOpsStart,
         _origOpsEnd: prev._origOpsEnd,
-        lvStart: prev.lvStart ?? r.lvStart,
-        lvEnd: prev.lvEnd ?? r.lvEnd
+        _leaveRemoved: removed,
+        _lvStartOrig: prev._lvStartOrig ?? r.lvStart ?? null,
+        _lvEndOrig: prev._lvEndOrig ?? r.lvEnd ?? null,
+        lvStart: removed ? null : (prev.lvStart ?? r.lvStart),
+        lvEnd: removed ? null : (prev.lvEnd ?? r.lvEnd)
       };
     });
     return [...merged, ...extras];
@@ -4437,6 +4480,29 @@
           ">${showLvLabel ? lvLabel : ''}</div>`;
         });
 
+        const otherDuties = (shift.odList || []).filter(od =>
+          !od.removed && od.odStart != null && od.odEnd != null
+        );
+        let odOverlays = '';
+        otherDuties.forEach(od => {
+          const odVisStart = Math.max(od.odStart, visStart);
+          const odVisEnd   = Math.min(od.odEnd, visEnd);
+          if (odVisEnd <= odVisStart) return;
+          const odLeft  = ((odVisStart - visStart) / (visEnd - visStart)) * 100;
+          const odWidth = ((odVisEnd - odVisStart) / (visEnd - visStart)) * 100;
+          const odLabel = `OD ${formatTime(od.odStart)}–${formatTime(od.odEnd)}`;
+          const showOdLabel = odWidth >= Math.max(12, odLabel.length * 0.55);
+          odOverlays += `<div style="
+            position:absolute;left:${odLeft}%;width:${odWidth}%;top:0;bottom:0;
+            background:rgba(124,92,191,0.82);
+            ${showOdLabel ? 'display:flex;align-items:center;justify-content:center;' : ''}
+            font-family:var(--font-display);font-size:11px;font-weight:700;
+            color:#fff;letter-spacing:0.1px;
+            pointer-events:none;z-index:4;
+            overflow:hidden;
+          ">${showOdLabel ? odLabel : ''}</div>`;
+        });
+
         const durLabel = `(${formatDuration(duration)})`;
 
         // Determine if leave covers the start or end of the shift
@@ -4509,6 +4575,18 @@
           }
         });
 
+        otherDuties.forEach(od => {
+          const odVisStart = Math.max(od.odStart, visStart);
+          const odVisEnd   = Math.min(od.odEnd, visEnd);
+          if (odVisEnd <= odVisStart) return;
+          const odL = ((odVisStart - visStart) / (visEnd - visStart)) * 100;
+          const odW = ((odVisEnd - odVisStart) / (visEnd - visStart)) * 100;
+          const odMid = (od.odStart + od.odEnd) / 2;
+          const shiftMid = (visStart + visEnd) / 2;
+          if (odMid <= shiftMid) blueLeft = Math.max(blueLeft, odL + odW);
+          else blueRight = Math.max(blueRight, 100 - odL);
+        });
+
         const blueWidth = Math.max(0, 100 - blueLeft - blueRight);
 
         const wxMark = shouldShowWxOnShift(shift, displayShifts, date)
@@ -4533,6 +4611,7 @@
           ${tosOverlays}
           ${yellowInner}
           ${lvOverlays}
+          ${odOverlays}
           ${wxMark}
           <span class="bar-label" style="
             position:absolute;
@@ -4634,6 +4713,13 @@
     );
   }
 
+  function modalOdSignature(list) {
+    return JSON.stringify((list || []).map(t => ({
+      id: t.id, from: t.from, to: t.to,
+      odStart: t.odStart, odEnd: t.odEnd, removed: !!t.removed
+    })));
+  }
+
   function modalTosSignature(list) {
     return JSON.stringify((list || []).map(t => ({
       id: t.id, from: t.from, to: t.to, type: t.type || '',
@@ -4649,6 +4735,7 @@
       opsEnd: shift.opsEnd ?? null,
       countForStaffing: !!shift.countForStaffing,
       tos: modalTosSignature(shift.tosList),
+      od: modalOdSignature(shift.odList),
       leaves: leaves.map(r => ({
         id: r.id, type: r.type, from: r.from, to: r.to,
         lvStart: r.lvStart ?? null, lvEnd: r.lvEnd ?? null,
@@ -4707,6 +4794,7 @@
           if (e.key === 'Enter') {
             e.preventDefault();
             if (id === 'addLeaveForm') confirmAddLeave();
+            else if (id === 'addODForm') confirmAddOD();
             else if (id === 'addTOSForm') confirmAddTOS();
           }
         };
@@ -4804,6 +4892,19 @@
       </div>`;
     }).join('');
 
+    const odItems = shift.odList || [];
+    const odList = document.getElementById('modalODList');
+    odList.innerHTML = odItems.map(od => {
+      const label = `OD ${formatTime(od.odStart ?? 0)}–${formatTime(od.odEnd ?? 0)}`;
+      return `<div class="modal-item${od.removed ? ' removed' : ''}">
+        <span class="modal-item-label">${label}</span>
+        ${od.removed
+          ? `<button class="modal-item-remove" style="background:rgba(26,171,155,0.1);color:var(--accent3);border-color:rgba(26,171,155,0.3);" onclick="readdODFromModal('${od.id}')">Re-add</button>`
+          : `<button class="modal-item-remove" onclick="removeODFromModal('${od.id}')">Remove</button>`
+        }
+      </div>`;
+    }).join('');
+
     // TOS items — stored directly on the shift, not in requests
     const tosItems = shift.tosList || [];
     const tosList = document.getElementById('modalTOSList');
@@ -4819,7 +4920,7 @@
     }).join('');
 
     if (resetForms) {
-      ['addLeaveForm','addTOSForm'].forEach(id => {
+      ['addLeaveForm','addODForm','addTOSForm'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
       });
@@ -4882,6 +4983,10 @@
       real.tosList = cloneModalData(next.tosList);
       real.tosList.forEach(t => { delete t._draftNew; });
     }
+    if (next.odList) {
+      real.odList = cloneModalData(next.odList);
+      real.odList.forEach(t => { delete t._draftNew; });
+    }
     if (real.dev) real.countForStaffing = !!next.countForStaffing;
 
     if (!requestsByDate[draft.date]) requestsByDate[draft.date] = [];
@@ -4935,6 +5040,24 @@
       req.resolvedAction = 'approve';
       req.status = 'approved-partial';
     }
+    refreshModalLists();
+  }
+
+  function removeODFromModal(odId) {
+    const draft = _modalDraft;
+    if (!draft || !draft.shift.odList) return;
+    const idx = draft.shift.odList.findIndex(t => String(t.id) === String(odId));
+    if (idx < 0) return;
+    if (draft.shift.odList[idx]._draftNew) draft.shift.odList.splice(idx, 1);
+    else draft.shift.odList[idx].removed = true;
+    refreshModalLists();
+  }
+
+  function readdODFromModal(odId) {
+    const draft = _modalDraft;
+    if (!draft || !draft.shift.odList) return;
+    const od = draft.shift.odList.find(t => String(t.id) === String(odId));
+    if (od) od.removed = false;
     refreshModalLists();
   }
 
@@ -4992,11 +5115,37 @@
       _lvStartOrig: lvStart,
       _lvEndOrig: lvEnd,
       _leaveRemoved: false,
+      _manual: true,
       _draftNew: true
     });
 
     document.getElementById('addLeaveRange').value = '';
     document.getElementById('addLeaveForm').style.display = 'none';
+    refreshModalLists();
+  }
+
+  function confirmAddOD() {
+    const draft = _modalDraft;
+    if (!draft) return;
+
+    const rangeVal = document.getElementById('addODRange').value.trim();
+    const range = parseTimeRange(rangeVal);
+    if (!range) { alert('Enter time range as HHMM-HHMM, e.g. 1200-1300'); return; }
+    const { start: odStart, end: odEnd } = range;
+    if (odEnd <= odStart) { alert('End must be after start.'); return; }
+
+    if (!draft.shift.odList) draft.shift.odList = [];
+    draft.shift.odList.push({
+      id: Date.now() + Math.random(),
+      from: rangeVal.split(/[-–]/)[0].trim(),
+      to:   rangeVal.split(/[-–]/)[1].trim(),
+      odStart, odEnd,
+      removed: false,
+      _draftNew: true
+    });
+
+    document.getElementById('addODRange').value = '';
+    document.getElementById('addODForm').style.display = 'none';
     refreshModalLists();
   }
 
@@ -5017,6 +5166,7 @@
       to:   rangeVal.split(/[-–]/)[1].trim(),
       tosStart, tosEnd,
       removed: false,
+      manual: true,
       _draftNew: true
     });
 
@@ -5063,7 +5213,42 @@
       purgeOrphanRequests();
       sanitizeRequests();
     }
+    reapplySavedTos(data.savedTosByDate || data.manualTosByDate);
     loadStaffingTargetsFromPayload(data);
+  }
+
+  function collectSavedTos() {
+    const out = {};
+    Object.entries(schedulesByDate).forEach(([date, shifts]) => {
+      const rows = [];
+      (shifts || []).forEach(s => {
+        (s.tosList || []).forEach(t => {
+          if (t.removed || t.tosStart == null || t.tosEnd == null) return;
+          rows.push({
+            name: s.name,
+            id: t.id,
+            from: t.from,
+            to: t.to,
+            type: t.type || '',
+            manual: !!t.manual
+          });
+        });
+      });
+      if (rows.length) out[date] = rows;
+    });
+    return out;
+  }
+
+  function reapplySavedTos(saved) {
+    Object.entries(saved || {}).forEach(([date, rows]) => {
+      (rows || []).forEach(t => {
+        if (!t || !t.name || t.from == null || t.to == null) return;
+        const id = applyTosToShift(date, t.name, t.from, t.to, t.type, t.id);
+        const shift = (schedulesByDate[date] || []).find(s => s.name === t.name);
+        const entry = shift && (shift.tosList || []).find(x => String(x.id) === String(id));
+        if (entry && t.manual) entry.manual = true;
+      });
+    });
   }
 
   function saveData() {
@@ -5073,7 +5258,9 @@
         requestsByDate,
         rowOrderByDate,
         importRawByDate,
-        staffingTargetsByDow
+        staffingTargetsByDow,
+        savedTosByDate: collectSavedTos(),
+        activeDate: (document.getElementById('dateFilter') || {}).value || ''
       }));
     } catch(e) { console.warn('Save failed:', e); }
   }
@@ -5120,7 +5307,8 @@
     const today = localDateStr();
     const dateFilter = document.getElementById('dateFilter');
     if (dateFilter) {
-      dateFilter.value = today;
+      const savedDate = readPersistedPayload().activeDate;
+      dateFilter.value = (savedDate && /^\d{4}-\d{2}-\d{2}$/.test(savedDate)) ? savedDate : today;
       dateFilter.addEventListener('change', () => { render(); renderRequests(); });
     }
     render();
