@@ -952,6 +952,25 @@
       <div id="modalGapContent" style="font-family:var(--font-mono);font-size:12px;display:flex;flex-direction:column;gap:4px;"></div>
     </div>
 
+    <!-- Other Duties section -->
+    <div id="modalODSection" style="margin-bottom:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);">Other Duties</div>
+        <button class="modal-item-add" onclick="toggleAddForm('addODForm')">+ Add Other Duties</button>
+      </div>
+      <div id="addODForm" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
+        <div style="margin-bottom:8px;">
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;font-family:var(--font-mono);">TIME RANGE (e.g. 1200-1300)</div>
+          <input type="text" id="addODRange" placeholder="1200-1300" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:12px;padding:5px 8px;border-radius:6px;outline:none;"/>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-primary" style="font-size:12px;padding:5px 12px;" onclick="confirmAddOD()">Add</button>
+          <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;" onclick="toggleAddForm('addODForm')">Cancel</button>
+        </div>
+      </div>
+      <div id="modalODList" style="display:flex;flex-direction:column;gap:5px;"></div>
+    </div>
+
     <!-- Leave section -->
     <div id="modalLeaveSection" style="margin-bottom:14px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -989,25 +1008,6 @@
         </div>
       </div>
       <div id="modalLeaveList" style="display:flex;flex-direction:column;gap:5px;"></div>
-    </div>
-
-    <!-- Other Duties section -->
-    <div id="modalODSection" style="margin-bottom:14px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);">Other Duties</div>
-        <button class="modal-item-add" onclick="toggleAddForm('addODForm')">+ Add Other Duties</button>
-      </div>
-      <div id="addODForm" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
-        <div style="margin-bottom:8px;">
-          <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;font-family:var(--font-mono);">TIME RANGE (e.g. 1200-1300)</div>
-          <input type="text" id="addODRange" placeholder="1200-1300" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:12px;padding:5px 8px;border-radius:6px;outline:none;"/>
-        </div>
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-primary" style="font-size:12px;padding:5px 12px;" onclick="confirmAddOD()">Add</button>
-          <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;" onclick="toggleAddForm('addODForm')">Cancel</button>
-        </div>
-      </div>
-      <div id="modalODList" style="display:flex;flex-direction:column;gap:5px;"></div>
     </div>
 
     <!-- TOS section -->
@@ -4043,7 +4043,20 @@
           leaveOff.push(lv.cpc);
         }
       });
-      results.push({ h, count: Math.max(0, count), names: names.sort(), leaveOff });
+      const odOff = [];
+      shifts.forEach(s => {
+        if (!working.has(s.name) || leaveOff.includes(s.name) || odOff.includes(s.name)) return;
+        const onOd = (s.odList || []).some(od => {
+          if (od.removed || od.odStart == null || od.odEnd == null) return false;
+          const odVis = visibleSpan(toTimeline(od.odStart, od.odEnd));
+          return slotOverlap(odVis, h) >= 0.5;
+        });
+        if (onOd) {
+          count--;
+          odOff.push(s.name);
+        }
+      });
+      results.push({ h, count: Math.max(0, count), names: names.sort(), leaveOff, odOff });
     }
     return results;
   }
@@ -4068,7 +4081,8 @@
       const row = hourCounts.find(r => r.h === h);
       if (!row) return;
       const leave = row.leaveOff.length ? ` −leave ${row.leaveOff.join(',')}` : '';
-      console.log(`${formatHourSlot(h)}: ${row.count} [${row.names.join(', ')}]${leave}`);
+      const od = row.odOff.length ? ` −OD ${row.odOff.join(',')}` : '';
+      console.log(`${formatHourSlot(h)}: ${row.count} [${row.names.join(', ')}]${leave}${od}`);
     });
     console.groupEnd();
   }
@@ -4081,9 +4095,10 @@
     console.log('shifts', shifts.length, shifts.map(s => `${s.name} ops${formatTime(opsStartOf(s))}-${formatTime(opsEndOf(s))} tl${formatTime(s.start)}-${formatTime(s.end)}${s.dev ? ' DEV' : ''}${s.cic ? ' CIC' : ''}`));
     console.log('onLeave', [...onLeave]);
     console.log('partialLeaves', partialLeaves.map(lv => `${lv.cpc} ${formatTime(lv.lvStart)}-${formatTime(lv.lvEnd)}`));
-    hourCounts.forEach(({ h, count, names, leaveOff }) => {
+    hourCounts.forEach(({ h, count, names, leaveOff, odOff }) => {
       const leave = leaveOff.length ? ` −${leaveOff.join(',')}` : '';
-      console.log(`${formatHourSlot(h)}: ${count} [${names.join(', ')}]${leave}`);
+      const od = (odOff || []).length ? ` −OD ${odOff.join(',')}` : '';
+      console.log(`${formatHourSlot(h)}: ${count} [${names.join(', ')}]${leave}${od}`);
     });
     return hourCounts;
   };
@@ -4281,7 +4296,7 @@
 
     html += `<div class="chart-axis" style="height:22px;margin-bottom:4px;">`;
     html += `<div class="chart-axis-spacer"></div><div class="chart-axis-track">`;
-    hourCounts.forEach(({ h, count, names, leaveOff }) => {
+    hourCounts.forEach(({ h, count, names, leaveOff, odOff }) => {
       const h24 = h % 24;
 
       const leftPct  = ((h - VIEW_START) / span) * 100;
@@ -4290,7 +4305,8 @@
       const isDayWindow = h >= 7 && h < 20; // 0700–2000 hour slots
       const slotLabel = formatHourSlot(h);
       const leaveNote = leaveOff.length ? ` −leave ${leaveOff.join(', ')}` : '';
-      const tip = `${slotLabel}: ${count}\n${names.join(', ')}${leaveNote}`;
+      const odNote = (odOff || []).length ? ` −OD ${odOff.join(', ')}` : '';
+      const tip = `${slotLabel}: ${count}\n${names.join(', ')}${leaveNote}${odNote}`;
 
       let bgColor, textColor;
       if (isDayWindow && count < 6) {
