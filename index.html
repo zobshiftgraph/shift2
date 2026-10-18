@@ -1092,6 +1092,17 @@
       <div class="logo-dot"></div>
       Shift Graph
     </div>
+    <select id="wxAreaSelect" class="wx-area-select" aria-label="Pre-duty area" onchange="onWxAreaChange()">
+      <option>AREA 1</option>
+      <option>AREA 2</option>
+      <option>AREA 3</option>
+      <option>AREA 4</option>
+      <option>AREA 5</option>
+      <option>AREA 6</option>
+      <option>AREA 7</option>
+      <option>AREA 8</option>
+      <option>TMU</option>
+    </select>
   </div>
   <div class="header-controls">
     <div style="flex-direction:row;align-items:center;gap:6px;display:flex;">
@@ -1130,17 +1141,6 @@
       </div>
     </div>
     <button class="btn btn-ghost btn-paste-schedule" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
-    <select id="wxAreaSelect" class="wx-area-select" aria-label="Pre-duty area" onchange="onWxAreaChange()">
-      <option>AREA 1</option>
-      <option>AREA 2</option>
-      <option>AREA 3</option>
-      <option>AREA 4</option>
-      <option>AREA 5</option>
-      <option>AREA 6</option>
-      <option>AREA 7</option>
-      <option>AREA 8</option>
-      <option>TMU</option>
-    </select>
     <button class="btn btn-ghost btn-paste-wx" onclick="pasteWX()" id="wxBtn" title="Read today's ZOB pre-duty completions and mark the selected area">✓ Pre-Duty WX</button>
     <button class="btn btn-ghost" onclick="undoAction()" id="undoBtn" disabled title="Undo">↩ Undo</button>
     <button class="btn btn-ghost" onclick="redoAction()" id="redoBtn" disabled title="Redo">↪ Redo</button>
