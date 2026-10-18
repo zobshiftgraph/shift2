@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Shift Graph Connector",
+  "version": "1.3",
+  "description": "Send WMT Scheduler data to Shift Graph, and read ZOB pre-duty completions for the graph.",
+  "permissions": ["activeTab", "scripting", "tabs"],
+  "host_permissions": [
+    "*://wmtscheduler.faa.gov/*",
+    "*://ksn2.faa.gov/*",
+    "file://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "file://*/*",
+        "https://zobshiftgraph.github.io/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Shift Graph Connector",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

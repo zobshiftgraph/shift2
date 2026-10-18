@@ -1063,7 +1063,7 @@
             <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
             <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
             <a id="wxBmBtn" class="bookmarklet-link bookmarklet-link-wx" href="#">✓ Copy Pre-Duty WX</a>
-            <p class="bookmarklet-help">ZOB pre-duty page — today’s completions by area</p>
+            <p class="bookmarklet-help">On the ZOB pre-duty tab, click this bookmark, then click Pre-Duty WX on the graph.</p>
             <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
             <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
             <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('wx')">Can&apos;t drag? Copy pre-duty WX bookmark URL</button>
@@ -1141,7 +1141,7 @@
       <option>AREA 8</option>
       <option>TMU</option>
     </select>
-    <button class="btn btn-ghost btn-paste-wx" onclick="pasteWX()" id="wxBtn" title="Apply today's pre-duty completions for the selected area">✓ Paste Pre-Duty WX</button>
+    <button class="btn btn-ghost btn-paste-wx" onclick="pasteWX()" id="wxBtn" title="Read today's ZOB pre-duty completions and mark the selected area">✓ Pre-Duty WX</button>
     <button class="btn btn-ghost" onclick="undoAction()" id="undoBtn" disabled title="Undo">↩ Undo</button>
     <button class="btn btn-ghost" onclick="redoAction()" id="redoBtn" disabled title="Redo">↪ Redo</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
@@ -1197,7 +1197,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-17b';
+  const BUILD_ID = 'count-2026-10-18a';
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
   let staffingTargetsByDow = defaultStaffingTargetsByDow();
@@ -1304,8 +1304,123 @@
     return byArea;
   }
 
+  function nyTodayKey(d) {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).format(d);
+    } catch (e) {
+      const z = new Date(d.getTime() - 4 * 3600000);
+      return z.getUTCFullYear() + '-' + String(z.getUTCMonth() + 1).padStart(2, '0') + '-' + String(z.getUTCDate()).padStart(2, '0');
+    }
+  }
+
+  function parseSpDate(v) {
+    if (!v) return null;
+    const m = String(v).match(/Date\((\d+)/);
+    if (m) return new Date(Number(m[1]));
+    const d = new Date(v);
+    return isNaN(d) ? null : d;
+  }
+
+  function rowsToPredutyText(rows) {
+    const today = nyTodayKey(new Date());
+    const bag = {};
+    (rows || []).forEach(item => {
+      const when = parseSpDate(item.DATE_x002f_TIME);
+      if (when && nyTodayKey(when) !== today) return;
+      const area = normalizeWxArea(item.AREA);
+      [item.INITIALS, item.INITIALS2].forEach(raw => {
+        String(raw || '').toUpperCase().split(/[^A-Z]+/).forEach(code => {
+          if (code.length !== 2 || !area) return;
+          bag[area + '\t' + code] = true;
+        });
+      });
+    });
+    const lines = Object.keys(bag);
+    return lines.length ? '===PREDUTY WX===\n' + lines.join('\n') : '';
+  }
+
+  function connectorReady() {
+    if (document.documentElement.dataset.sgConnector === '1') return Promise.resolve(true);
+    return new Promise(resolve => {
+      const requestId = 'ping-' + Date.now();
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onMsg);
+        resolve(false);
+      }, 300);
+      function onMsg(event) {
+        if (event.source !== window || !event.data || event.data.type !== 'sg-connector-pong' || event.data.requestId !== requestId) return;
+        clearTimeout(timer);
+        window.removeEventListener('message', onMsg);
+        resolve(true);
+      }
+      window.addEventListener('message', onMsg);
+      window.postMessage({ type: 'sg-connector-ping', requestId }, '*');
+    });
+  }
+
+  function requestPredutyFromConnector() {
+    return new Promise((resolve, reject) => {
+      const requestId = 'wx-' + Date.now() + '-' + Math.random();
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onMsg);
+        reject(new Error('The pre-duty list took too long to load.'));
+      }, 25000);
+      function onMsg(event) {
+        if (event.source !== window || !event.data || event.data.type !== 'sg-preduty-result' || event.data.requestId !== requestId) return;
+        clearTimeout(timer);
+        window.removeEventListener('message', onMsg);
+        if (event.data.ok && event.data.text) resolve(event.data.text);
+        else reject(new Error(event.data.error || 'Could not read the ZOB pre-duty list.'));
+      }
+      window.addEventListener('message', onMsg);
+      window.postMessage({ type: 'sg-fetch-preduty', requestId }, '*');
+    });
+  }
+
+  async function fetchPredutyDirect() {
+    const LIST = '2797cca5-641b-410c-a956-dd3b32db05bc';
+    const root = 'https://ksn2.faa.gov/AJO/PredutyWX/TCOB';
+    const start = new Date(Date.now() - 36 * 3600000).toISOString().replace(/\.\d+Z$/, '');
+    const url = root + "/_api/web/lists(guid'" + LIST + "')/items?$select=AREA,INITIALS,INITIALS2,DATE_x002f_TIME&$orderby=DATE_x002f_TIME desc&$top=500&$filter=DATE_x002f_TIME ge datetime'" + start + "'";
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(url, {
+        credentials: 'include',
+        signal: ctrl.signal,
+        headers: { Accept: 'application/json;odata=verbose' }
+      });
+      if (!r.ok) return '';
+      const data = await r.json();
+      const rows = (data && data.d && data.d.results) || [];
+      return rowsToPredutyText(rows);
+    } catch (e) {
+      return '';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // ── WX Mark ──
   async function pasteWX() {
+    const btn = document.getElementById('wxBtn');
+    const prevLabel = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '… Reading'; }
+    try {
+      if (await connectorReady()) {
+        applyWX(await requestPredutyFromConnector());
+        return;
+      }
+      const direct = await fetchPredutyDirect();
+      if (direct) { applyWX(direct); return; }
+    } catch (e) {
+      alert(e.message || 'Could not read the ZOB pre-duty list.');
+      return;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
+    }
     try {
       const text = await navigator.clipboard.readText();
       if (text.trim()) { applyWX(text); return; }
@@ -1354,7 +1469,7 @@
       if (!found.size) {
         alert(listed
           ? `${wxArea} has ${listed} completion${listed === 1 ? '' : 's'}, and none of those initials are on this graph.`
-          : `No pre-duty completions were copied for ${wxArea}.`);
+          : `No pre-duty completions for ${wxArea} today.`);
       }
       return;
     }

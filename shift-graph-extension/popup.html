@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; width: 280px; background: #1a1d2e; color: #e8eaf0; padding: 16px; }
+  .logo { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .logo-dot { width: 10px; height: 10px; background: #5b9bd5; border-radius: 50%; }
+  .logo-text { font-size: 14px; font-weight: 700; }
+  .status { font-size: 12px; color: #8b90a7; background: #22253a; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; min-height: 38px; line-height: 1.5; white-space: pre-wrap; }
+  .status.ok  { color: #22a06b; }
+  .status.warn { color: #e09000; }
+  .status.err  { color: #d94f6e; }
+  .btn { width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; margin-bottom: 8px; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn-primary { background: #5b9bd5; color: #fff; }
+  .sep { border: none; border-top: 1px solid #2e3148; margin: 10px 0; }
+  .hint { font-size: 11px; color: #555b7a; line-height: 1.5; text-align: center; }
+  #log { font-size: 10px; color: #555b7a; background: #0d0f1a; border-radius: 6px; padding: 8px; margin-top: 8px; min-height: 40px; white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<div class="logo">
+  <div class="logo-dot"></div>
+  <div class="logo-text">Shift Graph Connector</div>
+</div>
+<div class="status" id="status">Checking current page…</div>
+<button class="btn btn-primary" id="btnSend" disabled>📋 Send to Shift Graph</button>
+<hr class="sep"/>
+<div class="hint" id="hint">Navigate to the WMT Scheduler Worksheet View to get started.</div>
+<div id="log"></div>
+<script src="popup.js"></script>
+</body>
+</html>
