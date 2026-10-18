@@ -1222,6 +1222,7 @@
   const rowOrderByDate = {};
   const previewReqIds = new Set(); // requests currently being previewed
   const wxInitials = new Set();    // initials marked with WX checkmark
+  let wxDate = '';                 // calendar day those marks belong to
   const importRawByDate = {};      // last pasted WMT text per date (for rebuild/debug)
 
   // ── WX Mark ──
@@ -1271,6 +1272,7 @@
     snapshot('Apply WX marks');
 
     // Update wxInitials: remove those not in new text, add new ones
+    wxDate = localDateStr();
     for (const ini of [...wxInitials]) {
       if (!found.has(ini)) wxInitials.delete(ini);
     }
@@ -1323,6 +1325,7 @@
       rowOrderByDate: JSON.parse(JSON.stringify(rowOrderByDate)),
       importRawByDate: JSON.parse(JSON.stringify(importRawByDate)),
       wxInitials: [...wxInitials],
+      wxDate,
       previewReqIds: [...previewReqIds],
     };
   }
@@ -1334,6 +1337,7 @@
       rowOrderByDate: {},
       importRawByDate: {},
       wxInitials: [],
+      wxDate: '',
       previewReqIds: [],
     };
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
@@ -1346,6 +1350,7 @@
     Object.assign(importRawByDate, state.importRawByDate || {});
     wxInitials.clear();
     (state.wxInitials || []).forEach(i => wxInitials.add(i));
+    wxDate = state.wxDate || ((state.wxInitials || []).length ? localDateStr() : '');
     previewReqIds.clear();
     (state.previewReqIds || []).forEach(id => previewReqIds.add(String(id)));
   }
@@ -3996,6 +4001,35 @@
     return shift.dev && !shift.countForStaffing;
   }
 
+  function activePreviewRequests(date) {
+    return Array.from(previewReqIds)
+      .map(pid => (requestsByDate[date] || []).find(r => String(r.id) === pid))
+      .filter(Boolean);
+  }
+
+  function withPreviewShiftChanges(shifts, previewReqs) {
+    return shifts.map(s => {
+      const pr = previewReqs.find(r =>
+        isShiftChangeType(r.type) && r.to && shiftMatchesChangeRequest(s, r)
+      );
+      return pr ? applyShiftChangePreview(s, pr) : s;
+    });
+  }
+
+  // Day: ends 1200–1859. Eve: ends 1900–0000. Overnight and CIC stay out.
+  // Trainees count only when Count for staffing is on. Full leave (approved or viewed) drops the shift.
+  function dayEveShiftCounts(shifts, onLeave) {
+    let dayCount = 0;
+    let eveCount = 0;
+    shifts.forEach(s => {
+      if (onLeave.has(s.name)) return;
+      if (s.cic || isTraineeExcluded(s)) return;
+      if (s.end >= 12 && s.end < 19) dayCount++;
+      else if (s.end >= 19 && s.end <= 24) eveCount++;
+    });
+    return { dayCount, eveCount };
+  }
+
   function shiftCountsInHour(shift, hour, date) {
     const vis = visibleSpan(shiftBarSpan(shift, date));
     return slotOverlap(vis, hour) >= 0.5;
@@ -4153,6 +4187,7 @@
     Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
     previewReqIds.clear();
     wxInitials.clear();
+    wxDate = '';
     purgeOrphanRequests();
     clearExtensionPendingImport();
   }
@@ -4233,17 +4268,7 @@
     }
 
     // Apply all previewed shift changes to bar display (keeps row position)
-    const displayPreviewReqs = Array.from(previewReqIds)
-      .map(pid => (requestsByDate[getActiveDate()] || []).find(r => String(r.id) === pid))
-      .filter(Boolean);
-
-    const displayShifts = shiftsForDate.map(s => {
-      const pr = displayPreviewReqs.find(r =>
-        isShiftChangeType(r.type) && r.to && shiftMatchesChangeRequest(s, r)
-      );
-      if (pr) return applyShiftChangePreview(s, pr);
-      return s;
-    });
+    const displayShifts = withPreviewShiftChanges(shiftsForDate, activePreviewRequests(getActiveDate()));
 
     const byEmployee = buildByEmployee(displayShifts);
 
@@ -4282,10 +4307,7 @@
     html += `</div></div>`;
 
     const date = getActiveDate();
-    const allReqs = requestsByDate[date] || [];
-    const previewReqs = Array.from(previewReqIds)
-      .map(pid => allReqs.find(r => String(r.id) === pid))
-      .filter(Boolean);
+    const previewReqs = activePreviewRequests(date);
 
     // ── Hourly staffing counts (reflect previewed requests) ──
     const { hourCounts } = buildHourlyCountContext(date, displayShifts, previewReqs);
@@ -4666,9 +4688,10 @@
       return;
     }
 
-    // Day = ends at 18:59 or earlier; Eve = ends 19:00–00:00; exclude overnight (start >= 20)
-    const dayCount = shifts.filter(s => !s.dev && !s.cic && s.end >= 12 && s.end < 19).length;
-    const eveCount = shifts.filter(s => !s.dev && !s.cic && s.end >= 19 && s.end <= 24).length;
+    const previewReqs = activePreviewRequests(activeDate);
+    const countedShifts = withPreviewShiftChanges(shifts, previewReqs);
+    const onLeave = buildOnLeaveSet(requestsByDate[activeDate] || [], previewReqs);
+    const { dayCount, eveCount } = dayEveShiftCounts(countedShifts, onLeave);
 
     const targets = getStaffingTargetsForDate(activeDate);
     const dayColor = staffingCountColor(dayCount, targets.day);
@@ -5224,6 +5247,12 @@
     if (data.rowOrderByDate) Object.assign(rowOrderByDate, data.rowOrderByDate);
     Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
     if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
+    wxInitials.clear();
+    wxDate = '';
+    if (data.wxDate === localDateStr() && Array.isArray(data.wxInitials)) {
+      data.wxInitials.forEach(i => wxInitials.add(String(i).toUpperCase()));
+      wxDate = data.wxDate;
+    }
     if (options.rebuildFromRaw) rebuildRequestsFromImportRaw();
     else {
       purgeOrphanRequests();
@@ -5276,6 +5305,8 @@
         importRawByDate,
         staffingTargetsByDow,
         savedTosByDate: collectSavedTos(),
+        wxInitials: [...wxInitials],
+        wxDate,
         activeDate: (document.getElementById('dateFilter') || {}).value || ''
       }));
     } catch(e) { console.warn('Save failed:', e); }
