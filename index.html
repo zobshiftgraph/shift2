@@ -228,6 +228,17 @@
       color: #5b9bd5;
       background: rgba(91, 155, 213, 0.08);
     }
+    .wx-area-select {
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid #5b9bd5;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
 
     .bookmarklet-box {
       display: flex;
@@ -259,6 +270,7 @@
     }
 
     .bookmarklet-link-pp { background: #7ec8a4; }
+    .bookmarklet-link-wx { background: #5b9bd5; color: #fff; }
 
     .bookmarklet-help {
       font-size: 11px;
@@ -1050,8 +1062,11 @@
             <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
             <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
             <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
+            <a id="wxBmBtn" class="bookmarklet-link bookmarklet-link-wx" href="#">✓ Copy Pre-Duty WX</a>
+            <p class="bookmarklet-help">ZOB pre-duty page — today’s completions by area</p>
             <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
             <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
+            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('wx')">Can&apos;t drag? Copy pre-duty WX bookmark URL</button>
           </div>
         </div>
         <div class="menu-section">
@@ -1115,7 +1130,18 @@
       </div>
     </div>
     <button class="btn btn-ghost btn-paste-schedule" onclick="pasteSchedule()" id="pasteBtn">📋 Paste Schedule</button>
-    <button class="btn btn-ghost btn-paste-wx" onclick="pasteWX()" id="wxBtn">✓ Paste Pre-Duty WX</button>
+    <select id="wxAreaSelect" class="wx-area-select" aria-label="Pre-duty area" onchange="onWxAreaChange()">
+      <option>AREA 1</option>
+      <option>AREA 2</option>
+      <option>AREA 3</option>
+      <option>AREA 4</option>
+      <option>AREA 5</option>
+      <option>AREA 6</option>
+      <option>AREA 7</option>
+      <option>AREA 8</option>
+      <option>TMU</option>
+    </select>
+    <button class="btn btn-ghost btn-paste-wx" onclick="pasteWX()" id="wxBtn" title="Apply today's pre-duty completions for the selected area">✓ Paste Pre-Duty WX</button>
     <button class="btn btn-ghost" onclick="undoAction()" id="undoBtn" disabled title="Undo">↩ Undo</button>
     <button class="btn btn-ghost" onclick="redoAction()" id="redoBtn" disabled title="Redo">↪ Redo</button>
     <button class="btn btn-danger" onclick="clearAllDays()">Clear All Days</button>
@@ -1223,7 +1249,60 @@
   const previewReqIds = new Set(); // requests currently being previewed
   const wxInitials = new Set();    // initials marked with WX checkmark
   let wxDate = '';                 // calendar day those marks belong to
+  const WX_AREAS = ['AREA 1','AREA 2','AREA 3','AREA 4','AREA 5','AREA 6','AREA 7','AREA 8','TMU'];
+  let wxArea = 'AREA 1';
+  let wxByArea = {};               // { 'AREA 1': ['AB', ...], ... } from the ZOB page
   const importRawByDate = {};      // last pasted WMT text per date (for rebuild/debug)
+
+  function normalizeWxArea(raw) {
+    const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, ' ');
+    if (s === 'TMU') return 'TMU';
+    const m = s.match(/^AREA\s*([1-8])$/);
+    return m ? `AREA ${m[1]}` : '';
+  }
+
+  function selectedWxArea() {
+    const el = document.getElementById('wxAreaSelect');
+    return normalizeWxArea(el && el.value) || wxArea || WX_AREAS[0];
+  }
+
+  function syncWxAreaSelect() {
+    const el = document.getElementById('wxAreaSelect');
+    if (!el) return;
+    el.value = WX_AREAS.includes(wxArea) ? wxArea : WX_AREAS[0];
+  }
+
+  function marksForWxArea(area) {
+    const graphNames = new Set(getActiveShifts().map(s => s.name.toUpperCase()));
+    const found = new Set();
+    (wxByArea[area] || []).forEach(i => {
+      const up = String(i).toUpperCase();
+      if (graphNames.has(up)) found.add(up);
+    });
+    return found;
+  }
+
+  function setWxMarks(found) {
+    wxDate = localDateStr();
+    wxInitials.clear();
+    found.forEach(i => wxInitials.add(i));
+    render();
+  }
+
+  function parsePredutyPayload(text) {
+    if (!String(text || '').includes('===PREDUTY WX===')) return null;
+    const byArea = {};
+    String(text).split(/\r?\n/).forEach(line => {
+      const parts = line.split('\t');
+      if (parts.length < 2) return;
+      const area = normalizeWxArea(parts[0]);
+      const ini = String(parts[1] || '').trim().toUpperCase();
+      if (!area || !/^[A-Z]{2}$/.test(ini)) return;
+      if (!byArea[area]) byArea[area] = [];
+      if (!byArea[area].includes(ini)) byArea[area].push(ini);
+    });
+    return byArea;
+  }
 
   // ── WX Mark ──
   async function pasteWX() {
@@ -1231,18 +1310,22 @@
       const text = await navigator.clipboard.readText();
       if (text.trim()) { applyWX(text); return; }
     } catch(e) {}
-    // Fallback dialog
     const overlay = document.createElement('div');
     overlay.id = 'wxOverlay';
     overlay.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;';
     overlay.innerHTML = `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:90%;max-width:460px;box-shadow:0 12px 40px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:90%;max-width:480px;box-shadow:0 12px 40px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
         <div style="font-size:16px;font-weight:700;margin-bottom:6px;">✓ Paste Pre-Duty WX</div>
         <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
-          Press <strong>Ctrl+V</strong> to paste — initials found will be marked with ✓ WX on the graph.
+          On the ZOB pre-duty page, click the <strong>Copy Pre-Duty WX</strong> bookmark, then click this button again.
+          The area menu chooses which completions get a ✓ WX mark.
+          Or press <strong>Ctrl+V</strong> to paste initials.
         </div>
         <textarea id="wxTA" style="width:100%;height:60px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-mono);font-size:12px;padding:10px;resize:none;outline:none;opacity:0.5;" placeholder="Waiting for paste (Ctrl+V)..."></textarea>
-        <div style="margin-top:12px;"><button class="btn btn-ghost" onclick="document.getElementById('wxOverlay').remove()">Cancel</button></div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+          <a class="btn btn-ghost" href="https://ksn2.faa.gov/AJO/PredutyWX/TCOB/SitePages/ZOB.aspx" target="_blank" rel="noopener">Open ZOB page</a>
+          <button class="btn btn-ghost" onclick="document.getElementById('wxOverlay').remove()">Cancel</button>
+        </div>
       </div>`;
     overlay.addEventListener('click', () => overlay.remove());
     document.body.appendChild(overlay);
@@ -1260,25 +1343,43 @@
   }
 
   function applyWX(text) {
-    // Extract all 2-letter sequences anywhere in the text
+    const parsed = parsePredutyPayload(text);
+    if (parsed) {
+      snapshot('Apply WX marks');
+      wxByArea = parsed;
+      wxArea = selectedWxArea();
+      const found = marksForWxArea(wxArea);
+      const listed = (wxByArea[wxArea] || []).length;
+      setWxMarks(found);
+      if (!found.size) {
+        alert(listed
+          ? `${wxArea} has ${listed} completion${listed === 1 ? '' : 's'}, and none of those initials are on this graph.`
+          : `No pre-duty completions were copied for ${wxArea}.`);
+      }
+      return;
+    }
+
     const found = new Set();
     const matches = text.match(/[A-Za-z]{2}/g) || [];
     matches.forEach(m => found.add(m.toUpperCase()));
 
-    // Only keep initials that appear on the current graph
     const graphNames = new Set(getActiveShifts().map(s => s.name.toUpperCase()));
     for (const ini of found) { if (!graphNames.has(ini)) found.delete(ini); }
 
     snapshot('Apply WX marks');
+    wxArea = selectedWxArea();
+    wxByArea[wxArea] = [...found];
+    setWxMarks(found);
+  }
 
-    // Update wxInitials: remove those not in new text, add new ones
-    wxDate = localDateStr();
-    for (const ini of [...wxInitials]) {
-      if (!found.has(ini)) wxInitials.delete(ini);
+  function onWxAreaChange() {
+    wxArea = selectedWxArea();
+    if (!Object.keys(wxByArea).length) {
+      saveData();
+      return;
     }
-    for (const ini of found) wxInitials.add(ini);
-
-    render();
+    snapshot(`WX area ${wxArea}`);
+    setWxMarks(marksForWxArea(wxArea));
   }
 
   function currentTimelineHour() {
@@ -1326,6 +1427,8 @@
       importRawByDate: JSON.parse(JSON.stringify(importRawByDate)),
       wxInitials: [...wxInitials],
       wxDate,
+      wxArea,
+      wxByArea: JSON.parse(JSON.stringify(wxByArea)),
       previewReqIds: [...previewReqIds],
     };
   }
@@ -1338,6 +1441,8 @@
       importRawByDate: {},
       wxInitials: [],
       wxDate: '',
+      wxArea: 'AREA 1',
+      wxByArea: {},
       previewReqIds: [],
     };
     Object.keys(schedulesByDate).forEach(k => delete schedulesByDate[k]);
@@ -1351,6 +1456,9 @@
     wxInitials.clear();
     (state.wxInitials || []).forEach(i => wxInitials.add(i));
     wxDate = state.wxDate || ((state.wxInitials || []).length ? localDateStr() : '');
+    wxByArea = state.wxByArea && typeof state.wxByArea === 'object' ? state.wxByArea : {};
+    wxArea = normalizeWxArea(state.wxArea) || wxArea;
+    syncWxAreaSelect();
     previewReqIds.clear();
     (state.previewReqIds || []).forEach(id => previewReqIds.add(String(id)));
   }
@@ -2601,12 +2709,41 @@
     return `(function(){try{var L={'2030-10':[20,30,30,30],'0500-9':[5,0,14,0],'1200-9':[12,0,21,0],'1400-9':[14,0,23,0],'1600':[16,0,24,0],'0000':[0,0,32,0],'2230':[22,30,30,30],'0600':[6,0,14,0],'0600-10':[6,0,16,0],'0600-9':[6,0,15,0],'0700':[7,0,15,0],'0700-10':[7,0,17,0],'0700-9':[7,0,16,0],'0800':[8,0,16,0],'1100-10':[11,0,21,0],'1200-10':[12,0,22,0],'1300':[13,0,21,0],'1300-10':[13,0,23,0],'1400':[14,0,22,0],'1500':[15,0,23,0],'0900':[9,0,17,0],'0700F':[7,0,15,0],'0800-10':[8,0,18,0],'0800-9':[8,0,17,0],'0000F':[0,0,32,0],'2230F':[22,30,30,30],'0530-7':[5,30,12,30],'0600F':[6,0,14,0],'0800F':[8,0,16,0],'1000-7':[10,0,17,0],'1200':[12,0,20,0],'1300-7':[13,0,20,0],'1300-9':[13,0,22,0],'1300F':[13,0,21,0],'1400F':[14,0,22,0],'1500F':[15,0,23,0],'1600F':[16,0,24,0],'1430':[14,30,22,30],'0730':[7,30,15,30],'0830':[8,30,16,30],'0900-10':[9,0,19,0],'1000':[10,0,18,0],'1100-9':[11,0,20,0],'1400-7':[14,0,21,0],'0600-7':[6,0,13,0],'0700-7':[7,0,14,0],'1400-10':[14,0,24,0],'0800-7':[8,0,15,0],'1500-9':[15,0,24,0],'2300F':[23,0,31,0],'2300':[23,0,31,0],'0630':[6,30,14,30],'2200-9':[22,0,31,0],'2300-9':[23,0,32,0],'0900-7':[9,0,16,0],'1600-7':[16,0,23,0],'1700-9':[17,0,26,0],'2200-10':[22,0,32,0],'0900-9':[9,0,17,0],'1200-7':[12,0,19,0],'2230-9':[22,30,31,30],'0730-7':[7,30,14,30],'1500-7':[15,0,22,0],'1000-10':[10,0,20,0],'1000-9':[10,0,19,0],'1100':[11,0,19,0],'1330':[13,30,21,30],'0630-7':[6,30,13,30],'2230-7':[22,30,29,30],'1100-7':[11,0,18,0],'1700-7':[17,0,24,0],'1615':[16,15,24,15],'1615-7':[16,15,23,15],'1700':[17,0,25,0],'2130':[21,30,29,30],'0530':[5,30,13,30],'1100F':[11,0,19,0],'2200':[22,0,30,0],'2100-10':[21,0,31,0],'0630-9':[6,30,15,30],'1200F':[12,0,20,0],'0500-10':[5,0,15,0],'0530-9':[5,30,14,30],'0530-10':[5,30,15,30],'1130':[11,30,19,30],'1530':[15,30,23,30],'2330-7':[23,30,30,30],'2130-9':[21,30,30,30],'1600-9':[16,0,25,0],'2300-7':[23,0,30,0],'1215-10':[12,15,22,15],'0000-7':[0,0,31,0],'1430-7':[14,30,21,30],'0600-10F':[6,0,16,0],'0900-10F':[9,0,19,0],'0400':[4,0,12,0],'1200-10F':[12,0,22,0],'0900F':[9,0,17,0],'2230-10':[22,30,32,30],'0930-7':[9,30,16,30],'0930':[9,30,17,30],'0630-10':[6,30,16,30],'1330-10':[13,30,23,30],'1300-10F':[13,0,23,0],'0000-9':[0,0,33,0],'0800-10F':[8,0,18,0],'1100-10F':[11,0,21,0],'0430-10':[4,30,14,30],'1330-9':[13,30,22,30],'0700-10F':[7,0,17,0],'1130-10':[11,30,21,30],'1430-9':[14,30,23,30],'0600-7F':[6,0,13,0],'1630':[16,30,24,30],'2345':[23,45,31,45],'0930-10':[9,30,19,30],'2100-10F':[21,0,31,0],'0545-6':[5,45,11,45],'0830-10':[8,30,18,30],'2345F':[23,45,31,45],'1400-10F':[14,0,24,0],'0500-6':[5,0,11,0],'2245':[22,45,30,45],'2245-9':[22,45,31,45],'2245F':[22,45,30,45],'0545-7':[5,45,12,45],'0700ADMIN':[7,0,15,30],'0500':[5,0,13,0],'0545':[5,45,13,45],'2100':[21,0,29,0]};function shiftEndTime(code){var c=code.toUpperCase().replace(/^(@D|@T|@|C|T|D)/,'').replace(/(TMC|OM)[\$\^!]?$/,'').replace(/[\$\^!]$/,'').replace(/^AREA/,'').trim();if(L[c]){return L[c];}var nf=c.replace(/F$/,'');if(L[nf]){return L[nf];}return null;}var dateEl=document.getElementById('lblSelectedDate');if(!dateEl){alert('Not on WMT Worksheet View page.');return;}var dateText=dateEl.textContent.trim();var out='===DATE===\\n'+dateText+'\\n===SCHEDULE_START===\\n';var shiftTable=document.getElementById('ScheduledShifts');if(!shiftTable){alert('Could not find ScheduledShifts table.');return;}var rows=shiftTable.querySelectorAll('tr');for(var i=1;i<rows.length;i++){var tds=rows[i].querySelectorAll('td');if(tds.length<3)continue;var rawCode=tds[0].textContent.trim();if(!rawCode)continue;var names=[];var supLinks=tds[1].querySelectorAll('a');for(var s=0;s<supLinks.length;s++){var st=supLinks[s].textContent.trim().replace(/\\s+/g,'');if(st)names.push('('+st+')');}var cpcLinks=tds[2].querySelectorAll('a');for(var c=0;c<cpcLinks.length;c++){var ct=cpcLinks[c].textContent.trim().replace(/\\s+/g,'');if(ct)names.push(ct);}if(tds.length>3){var devLinks=tds[3].querySelectorAll('a');for(var d=0;d<devLinks.length;d++){var dt=devLinks[d].textContent.trim().replace(/\\s+/g,'');if(dt)names.push('<'+dt+'>');}}if(names.length>0)out+=rawCode+'\\n'+names.join(' ')+'\\n';}out+='===REQUESTS_START===\\n';out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';function parseReqTable(tblId){var tbl=document.getElementById(tblId);if(!tbl)return;var rs=tbl.querySelectorAll('tr');for(var i=1;i<rs.length;i++){var tds=rs[i].querySelectorAll('td');if(tds.length<6)continue;out+=tds[0].textContent.trim()+'\\t'+tds[1].textContent.trim()+'\\t'+tds[2].textContent.trim()+'\\t'+tds[3].textContent.trim()+'\\t'+tds[4].textContent.trim()+'\\t'+tds[5].textContent.trim()+'\\t'+(tds.length>6?tds[6].textContent.trim():'')+'\\t'+(tds.length>7?tds[7].textContent.trim():'')+'\\n';}}parseReqTable('tblShiftChange');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblXTECTE');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblSupRequests');navigator.clipboard.writeText(out).then(function(){},function(){alert('Clipboard access denied.');});}catch(e){alert('Bookmarklet error: '+e.message);}})();`;
   }
 
+  function getWxBookmarkletCode() {
+    return `(function(){try{
+      var LIST='2797cca5-641b-410c-a956-dd3b32db05bc';
+      var root=location.origin+'/AJO/PredutyWX/TCOB';
+      function nyKey(d){try{return new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);}catch(e){var z=new Date(d.getTime()-4*3600000);return z.getUTCFullYear()+'-'+String(z.getUTCMonth()+1).padStart(2,'0')+'-'+String(z.getUTCDate()).padStart(2,'0');}}
+      function parseSpDate(v){if(!v)return null;var m=String(v).match(/Date\\((\\d+)/);if(m)return new Date(Number(m[1]));var d=new Date(v);return isNaN(d)?null:d;}
+      function areaOf(raw){var s=String(raw||'').trim().toUpperCase().replace(/\\s+/g,' ');if(s==='TMU')return 'TMU';var m=s.match(/^AREA\\s*([1-8])$/);return m?('AREA '+m[1]):'';}
+      function addCode(bag,area,raw){String(raw||'').toUpperCase().split(/[^A-Z]+/).forEach(function(code){if(code.length!==2||!area)return;var key=area+'\\t'+code;if(!bag[key])bag[key]=true;});}
+      var today=nyKey(new Date());
+      var start=new Date(Date.now()-36*3600000).toISOString().replace(/\\.\\d+Z$/,'');
+      var url=root+"/_api/web/lists(guid'"+LIST+"')/items?$select=AREA,INITIALS,INITIALS2,DATE_x002f_TIME&$orderby=DATE_x002f_TIME desc&$top=500&$filter=DATE_x002f_TIME ge datetime'"+start+"'";
+      function fromDom(){var box=document.getElementById('WebPartWPQ2');if(!box)return [];var area='';var lines=[];box.querySelectorAll('tr').forEach(function(tr){var gb=tr.querySelector('.ms-gb,.ms-gb2');if(gb){var t=gb.textContent.replace(/\\s+/g,' ').trim();var m=t.match(/AREA\\s*[1-8]|TMU/i);area=m?areaOf(m[0]):'';return;}if(!area)return;tr.querySelectorAll('td').forEach(function(td){var cell=td.textContent.trim();if(/^[A-Za-z]{2}$/.test(cell))lines.push(area+'\\t'+cell.toUpperCase());});});return lines;}
+      function finish(lines){var uniq=[];var seen={};lines.forEach(function(line){if(!seen[line]){seen[line]=true;uniq.push(line);}});if(!uniq.length){alert('No pre-duty initials found for today. Expand today\\'s area groups on the ZOB page and click the bookmark again.');return;}
+        var text='===PREDUTY WX===\\n'+uniq.join('\\n');
+        navigator.clipboard.writeText(text).then(function(){alert('Copied '+uniq.length+' pre-duty entries. In Shift Graph, pick an area and click Paste Pre-Duty WX.');},function(){prompt('Copy this into Shift Graph:',text);});
+      }
+      fetch(url,{credentials:'same-origin',headers:{Accept:'application/json;odata=verbose'}}).then(function(r){if(!r.ok)throw new Error('list '+r.status);return r.json();}).then(function(data){
+        var rows=(data.d&&data.d.results)||[];
+        var bag={};
+        rows.forEach(function(item){var when=parseSpDate(item.DATE_x002f_TIME);if(when&&nyKey(when)!==today)return;var area=areaOf(item.AREA);addCode(bag,area,item.INITIALS);addCode(bag,area,item.INITIALS2);});
+        var lines=Object.keys(bag);
+        if(!lines.length)lines=fromDom();
+        finish(lines);
+      }).catch(function(){var lines=fromDom();if(lines.length)finish(lines);else alert('Could not read the ZOB pre-duty list. Open https://ksn2.faa.gov/AJO/PredutyWX/TCOB/SitePages/ZOB.aspx and click this bookmark there.');});
+    }catch(e){alert('Pre-duty bookmark error: '+(e&&e.message?e.message:e));}})();`;
+  }
+
   function initBookmarkletLinks() {
     const bm = document.getElementById('bmBtn');
     const pp = document.getElementById('ppBtn');
+    const wx = document.getElementById('wxBmBtn');
     if (bm) bm.href = 'javascript:' + encodeURIComponent(getDayBookmarkletCode());
     if (pp) pp.href = 'javascript:' + encodeURIComponent(getPayPeriodBookmarkletCode());
-    [bm, pp].forEach(link => {
+    if (wx) wx.href = 'javascript:' + encodeURIComponent(getWxBookmarkletCode());
+    [bm, pp, wx].forEach(link => {
       if (!link) return;
       link.addEventListener('mousedown', e => e.stopPropagation());
       link.addEventListener('dragstart', e => e.stopPropagation());
@@ -2615,8 +2752,10 @@
   }
 
   function copyBookmarkletUrl(which) {
-    const link = document.getElementById(which === 'pp' ? 'ppBtn' : 'bmBtn');
-    const code = which === 'pp' ? getPayPeriodBookmarkletCode() : getDayBookmarkletCode();
+    const ids = { pp: 'ppBtn', wx: 'wxBmBtn', day: 'bmBtn' };
+    const makers = { pp: getPayPeriodBookmarkletCode, wx: getWxBookmarkletCode, day: getDayBookmarkletCode };
+    const link = document.getElementById(ids[which] || ids.day);
+    const code = (makers[which] || makers.day)();
     const bookmarkletUrl = 'javascript:' + encodeURIComponent(code);
     copyBookmarkletToClipboard(bookmarkletUrl, link, link?.textContent?.trim() || 'Bookmark');
   }
@@ -4188,6 +4327,7 @@
     previewReqIds.clear();
     wxInitials.clear();
     wxDate = '';
+    wxByArea = {};
     purgeOrphanRequests();
     clearExtensionPendingImport();
   }
@@ -5249,9 +5389,21 @@
     if (data.importRawByDate) Object.assign(importRawByDate, data.importRawByDate);
     wxInitials.clear();
     wxDate = '';
-    if (data.wxDate === localDateStr() && Array.isArray(data.wxInitials)) {
-      data.wxInitials.forEach(i => wxInitials.add(String(i).toUpperCase()));
+    wxByArea = {};
+    wxArea = WX_AREAS[0];
+    if (data.wxByArea && typeof data.wxByArea === 'object') {
+      Object.keys(data.wxByArea).forEach(k => {
+        const area = normalizeWxArea(k);
+        if (!area || !Array.isArray(data.wxByArea[k])) return;
+        wxByArea[area] = data.wxByArea[k].map(i => String(i).toUpperCase());
+      });
+    }
+    if (normalizeWxArea(data.wxArea)) wxArea = normalizeWxArea(data.wxArea);
+    if (data.wxDate === localDateStr()) {
       wxDate = data.wxDate;
+      const stored = wxByArea[wxArea];
+      const list = Array.isArray(stored) ? stored : (Array.isArray(data.wxInitials) ? data.wxInitials : []);
+      list.forEach(i => wxInitials.add(String(i).toUpperCase()));
     }
     if (options.rebuildFromRaw) rebuildRequestsFromImportRaw();
     else {
@@ -5307,6 +5459,8 @@
         savedTosByDate: collectSavedTos(),
         wxInitials: [...wxInitials],
         wxDate,
+        wxArea,
+        wxByArea,
         activeDate: (document.getElementById('dateFilter') || {}).value || ''
       }));
     } catch(e) { console.warn('Save failed:', e); }
@@ -5346,6 +5500,7 @@
   window.pasteSchedule = pasteSchedule;
   (function init() {
     loadData();
+    syncWxAreaSelect();
     syncStaffingTargetInputs();
     initBookmarkletLinks();
     console.info('Shift Graph build:', BUILD_ID);
