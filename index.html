@@ -2288,39 +2288,21 @@
   }
 
   function worksheetNotesText(doc) {
-    var ids = ['lblNotes','txtNotes','Notes','divNotes','taNotes','DailyNotes','lblDailyNotes','txtDailyNotes','worksheetNotes','lblWorksheetNotes','ShiftNotes','lblShiftNotes','txtShiftNotes','pnlNotes','txtAreaNotes','Comments','lblComments','txtComments','lblDailyLog','txtDailyLog'];
-    function textOf(el) {
-      if (!el) return '';
-      var tag = (el.tagName || '').toLowerCase();
-      if (tag === 'table') {
-        var rows = el.querySelectorAll('tr');
-        var lines = [];
-        for (var r = 0; r < rows.length; r++) {
-          var line = (rows[r].innerText || rows[r].textContent || '').replace(/\s+/g, ' ').trim();
-          if (line && !/^notes:?$/i.test(line)) lines.push(line);
-        }
-        return lines.join('\n\n');
-      }
-      var raw = (tag === 'textarea' || tag === 'input') ? (el.value || '') : (el.innerText || el.textContent || '');
-      return String(raw || '').replace(/\u00a0/g, ' ').trim();
+    var table = doc.getElementById('ShiftNotesForDay');
+    if (!table) return '';
+    var lines = [];
+    var rows = table.querySelectorAll('tr');
+    for (var r = 0; r < rows.length; r++) {
+      var tds = rows[r].querySelectorAll('td');
+      if (!tds.length) continue;
+      var cell = tds.length > 1 ? tds[tds.length - 1] : tds[0];
+      var link = cell.querySelector('a');
+      if (link && /AddShiftNote/i.test(link.getAttribute('href') || '')) continue;
+      var text = String((link ? link.textContent : cell.textContent) || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!text || /add shift notes/i.test(text)) continue;
+      if (lines.indexOf(text) === -1) lines.push(text);
     }
-    for (var i = 0; i < ids.length; i++) {
-      var t = textOf(doc.getElementById(ids[i]));
-      if (t && t.length < 8000) return t;
-    }
-    var nodes = doc.querySelectorAll('h1,h2,h3,h4,legend,th,label,span,div,td,caption');
-    for (var n = 0; n < nodes.length; n++) {
-      var label = (nodes[n].innerText || nodes[n].textContent || '').replace(/\s+/g, ' ').trim();
-      if (label.length > 40) continue;
-      if (!/^notes:?$/i.test(label) && !/^shift notes:?$/i.test(label) && !/^daily notes:?$/i.test(label)) continue;
-      var box = nodes[n].nextElementSibling;
-      if (!box && nodes[n].parentElement) box = nodes[n].parentElement.nextElementSibling;
-      if (!box) continue;
-      var area = box.querySelector ? box.querySelector('textarea,input[type="text"]') : null;
-      var text = textOf(area || box);
-      if (text && text.length < 8000 && !/^notes:?$/i.test(text)) return text;
-    }
-    return '';
+    return lines.join('\n');
   }
 
   function extractWorksheetFromDoc(doc) {
@@ -2360,22 +2342,55 @@
         var parts = String(bits[b]).trim().split(/[\s,]+/);
         for (var p = 0; p < parts.length; p++) {
           var t = parts[p].replace(/[()<>\[\]{}]/g, '').replace(/\s+/g, '');
-          if (/^[A-Za-z]{1,3}$/.test(t)) names.push(wrap(t.toUpperCase()));
+          if (/^[A-Za-z]{1,3}[\$\^\!]?$/.test(t)) names.push(wrap(t.toUpperCase()));
         }
       }
       return names;
     }
+    var blocks = [];
     for (var i = 1; i < rows.length; i++) {
       var tds = rows[i].querySelectorAll('td');
       if (tds.length < 3) continue;
-      var rawCode = (tds[0].textContent || '').trim();
+      var rawCode = (tds[0].textContent || '').replace(/\s+/g, '').trim();
       if (!rawCode) continue;
       var names = [];
       cellNames(tds[col.sup], function(t){ return '(' + t + ')'; }).forEach(function(n){ names.push(n); });
       cellNames(tds[col.cpc], function(t){ return t; }).forEach(function(n){ names.push(n); });
       if (col.dev >= 0 && tds[col.dev]) cellNames(tds[col.dev], function(t){ return '<' + t + '>'; }).forEach(function(n){ names.push(n); });
       if (col.detail >= 0 && tds[col.detail]) cellNames(tds[col.detail], function(t){ return '{' + t + '}'; }).forEach(function(n){ names.push(n); });
-      if (names.length) out += rawCode + '\n' + names.join(' ') + '\n';
+      if (names.length) blocks.push({ code: rawCode, names: names });
+    }
+    var detailTable = doc.getElementById('ControllersOnDetailShifts');
+    if (detailTable) {
+      var drows = detailTable.querySelectorAll('tr');
+      for (var dr = 1; dr < drows.length; dr++) {
+        var dtds = drows[dr].querySelectorAll('td');
+        if (dtds.length < 2) continue;
+        var dlink = dtds[0].querySelector('a');
+        var ini = String((dlink ? dlink.textContent : dtds[0].textContent) || '').replace(/\u00a0/g, '').replace(/\s+/g, '');
+        if (!/^[A-Za-z]{1,3}[\$\^\!]?$/.test(ini)) continue;
+        ini = ini.toUpperCase();
+        var code = String(dtds[1].textContent || '').replace(/\u00a0/g, '').replace(/\s+/g, '');
+        if (!code) continue;
+        var block = null;
+        for (var b = 0; b < blocks.length; b++) {
+          if (blocks[b].code === code) block = blocks[b];
+        }
+        if (!block) {
+          block = { code: code, names: [] };
+          blocks.push(block);
+        }
+        var bare = ini.replace(/[\$\^\!]$/, '');
+        var idx = -1;
+        for (var n = 0; n < block.names.length; n++) {
+          if (block.names[n].replace(/[()<>\[\]{}]/g, '').replace(/[\$\^\!]$/, '') === bare) idx = n;
+        }
+        if (idx >= 0) block.names[idx] = '{' + ini + '}';
+        else block.names.push('{' + ini + '}');
+      }
+    }
+    for (var bi = 0; bi < blocks.length; bi++) {
+      if (blocks[bi].names.length) out += blocks[bi].code + '\n' + blocks[bi].names.join(' ') + '\n';
     }
     var notes = worksheetNotesText(doc);
     if (notes) out += '===NOTES_START===\n' + notes + '\n===NOTES_END===\n';
@@ -5325,7 +5340,14 @@
     renderNotes();
     if (!shifts.length) {
       container.innerHTML = '';
-      container.appendChild(empty);
+      let blank = empty;
+      if (!blank || !blank.nodeType) {
+        blank = document.createElement('div');
+        blank.className = 'empty-state';
+        blank.id = 'emptyState';
+        blank.innerHTML = '<div class="icon">📋</div><p>Add shifts above to visualize your team\'s schedule</p>';
+      }
+      container.appendChild(blank);
       document.getElementById('chartSubtitle').textContent = 'No shifts scheduled for this date';
       renderRequests();
       return;

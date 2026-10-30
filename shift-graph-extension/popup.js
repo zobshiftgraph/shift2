@@ -18,34 +18,21 @@ function findShiftGraphTab(tabs) {
 }
 
 function extractWorksheet() {
-  function textOf(el) {
-    if (!el) return '';
-    const tag = (el.tagName || '').toLowerCase();
-    if (tag === 'table') {
-      return [...el.querySelectorAll('tr')].map(row => (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim()).filter(line => line && !/^notes:?$/i.test(line)).join('\n\n');
-    }
-    const raw = (tag === 'textarea' || tag === 'input') ? (el.value || '') : (el.innerText || el.textContent || '');
-    return String(raw || '').replace(/\u00a0/g, ' ').trim();
-  }
   function notesText(doc) {
-    const ids = ['lblNotes','txtNotes','Notes','divNotes','taNotes','DailyNotes','lblDailyNotes','txtDailyNotes','worksheetNotes','lblWorksheetNotes','ShiftNotes','lblShiftNotes','txtShiftNotes','pnlNotes','txtAreaNotes','Comments','lblComments','txtComments','lblDailyLog','txtDailyLog'];
-    for (const id of ids) {
-      const t = textOf(doc.getElementById(id));
-      if (t && t.length < 8000) return t;
-    }
-    const nodes = doc.querySelectorAll('h1,h2,h3,h4,legend,th,label,span,div,td,caption');
-    for (const node of nodes) {
-      const label = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
-      if (label.length > 40) continue;
-      if (!/^notes:?$/i.test(label) && !/^shift notes:?$/i.test(label) && !/^daily notes:?$/i.test(label)) continue;
-      let box = node.nextElementSibling;
-      if (!box && node.parentElement) box = node.parentElement.nextElementSibling;
-      if (!box) continue;
-      const area = box.querySelector ? box.querySelector('textarea,input[type="text"]') : null;
-      const text = textOf(area || box);
-      if (text && text.length < 8000 && !/^notes:?$/i.test(text)) return text;
-    }
-    return '';
+    const table = doc.getElementById('ShiftNotesForDay');
+    if (!table) return '';
+    const lines = [];
+    table.querySelectorAll('tr').forEach(row => {
+      const tds = row.querySelectorAll('td');
+      if (!tds.length) return;
+      const cell = tds.length > 1 ? tds[tds.length - 1] : tds[0];
+      const link = cell.querySelector('a');
+      if (link && /AddShiftNote/i.test(link.getAttribute('href') || '')) return;
+      const text = String((link ? link.textContent : cell.textContent) || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!text || /add shift notes/i.test(text)) return;
+      if (!lines.includes(text)) lines.push(text);
+    });
+    return lines.join('\n');
   }
   const dateEl = document.getElementById('lblSelectedDate');
   if (!dateEl) return { error: 'Not on Worksheet View' };
@@ -80,23 +67,49 @@ function extractWorksheet() {
     bits.forEach(bit => {
       String(bit).trim().split(/[\s,]+/).forEach(part => {
         const t = part.replace(/[()<>\[\]{}]/g, '').replace(/\s+/g, '');
-        if (/^[A-Za-z]{1,3}$/.test(t)) names.push(wrap(t.toUpperCase()));
+        if (/^[A-Za-z]{1,3}[\$\^\!]?$/.test(t)) names.push(wrap(t.toUpperCase()));
       });
     });
     return names;
   }
+  const blocks = [];
   rows.forEach((row, i) => {
     if (i === 0) return;
     const tds = row.querySelectorAll('td');
     if (tds.length < 3) return;
-    const rawCode = (tds[0].textContent || '').trim();
+    const rawCode = (tds[0].textContent || '').replace(/\s+/g, '').trim();
     if (!rawCode) return;
     const names = []
       .concat(cellNames(tds[col.sup], t => '(' + t + ')'))
       .concat(cellNames(tds[col.cpc], t => t))
       .concat(col.dev >= 0 && tds[col.dev] ? cellNames(tds[col.dev], t => '<' + t + '>') : [])
       .concat(col.detail >= 0 && tds[col.detail] ? cellNames(tds[col.detail], t => '{' + t + '}') : []);
-    if (names.length) out += rawCode + '\n' + names.join(' ') + '\n';
+    if (names.length) blocks.push({ code: rawCode, names });
+  });
+  const detailTable = document.getElementById('ControllersOnDetailShifts');
+  if (detailTable) {
+    [...detailTable.querySelectorAll('tr')].slice(1).forEach(row => {
+      const tds = row.querySelectorAll('td');
+      if (tds.length < 2) return;
+      const link = tds[0].querySelector('a');
+      let ini = String((link ? link.textContent : tds[0].textContent) || '').replace(/\u00a0/g, '').replace(/\s+/g, '');
+      if (!/^[A-Za-z]{1,3}[\$\^\!]?$/.test(ini)) return;
+      ini = ini.toUpperCase();
+      const code = String(tds[1].textContent || '').replace(/\u00a0/g, '').replace(/\s+/g, '');
+      if (!code) return;
+      let block = blocks.find(b => b.code === code);
+      if (!block) {
+        block = { code, names: [] };
+        blocks.push(block);
+      }
+      const bare = ini.replace(/[\$\^\!]$/, '');
+      const idx = block.names.findIndex(n => n.replace(/[()<>\[\]{}]/g, '').replace(/[\$\^\!]$/, '') === bare);
+      if (idx >= 0) block.names[idx] = '{' + ini + '}';
+      else block.names.push('{' + ini + '}');
+    });
+  }
+  blocks.forEach(block => {
+    if (block.names.length) out += block.code + '\n' + block.names.join(' ') + '\n';
   });
   const notes = notesText(document);
   if (notes) out += '===NOTES_START===\n' + notes + '\n===NOTES_END===\n';
