@@ -669,12 +669,109 @@
       overflow-y: auto;
       min-height: 0;
     }
-    .content-layout .requests-wrap {
-      width: 280px;
+    .content-layout .side-column {
+      width: 300px;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
+      min-height: 0;
+      gap: 12px;
+    }
+    .content-layout .requests-wrap {
+      width: auto;
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
       overflow: hidden;
+    }
+    .content-layout .notes-wrap {
+      flex: 0 1 240px;
+      min-height: 150px;
+      margin-top: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .notes-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .notes-title { font-size: 15px; font-weight: 700; }
+    .notes-date {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .notes-body {
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .notes-empty {
+      padding: 18px 8px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    .note-row {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+    }
+    .note-text {
+      flex: 1;
+      min-height: 52px;
+      resize: vertical;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: var(--font-display);
+      font-size: 13px;
+      line-height: 1.35;
+      padding: 8px 10px;
+      outline: none;
+    }
+    .note-text:focus { border-color: #8ec9f2; }
+    .note-remove {
+      background: rgba(217,79,110,0.1);
+      color: var(--accent2);
+      border: 1px solid rgba(217,79,110,0.25);
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 8px;
+      cursor: pointer;
+      font-family: var(--font-display);
+      white-space: nowrap;
+    }
+    .note-remove:hover { background: rgba(217,79,110,0.2); }
+    .modal-od-time {
+      width: 132px;
+      flex: 0 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      outline: none;
+      text-align: center;
     }
     .content-layout .requests-body {
       flex: 1;
@@ -682,6 +779,22 @@
       max-height: none;
     }
 
+    .content-layout .side-column .requests-wrap.collapsed {
+      width: auto;
+      min-width: 0;
+      flex: 0 0 auto;
+    }
+    .content-layout .side-column .requests-wrap.collapsed .requests-header {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+    }
+    .content-layout .side-column .requests-wrap.collapsed .requests-title {
+      writing-mode: horizontal-tb;
+      text-orientation: mixed;
+      font-size: 15px;
+    }
     .content-layout .requests-wrap.collapsed {
       width: 36px;
       min-width: 36px;
@@ -900,7 +1013,9 @@
 
     @media (max-width: 900px) {
       .content-layout { flex-direction: column; overflow-y: auto; }
-      .content-layout .requests-wrap { width: 100%; flex-shrink: 0; max-height: 300px; }
+      .content-layout .side-column { width: 100%; max-height: 460px; }
+      .content-layout .requests-wrap { width: 100%; flex-shrink: 0; max-height: 220px; }
+      .content-layout .notes-wrap { flex: 1 1 180px; margin-top: 0; }
       .content-layout .chart-wrap { flex: none; }
       body { overflow: auto; }
     }
@@ -1059,7 +1174,7 @@
           <p class="bookmarklet-help" style="margin-bottom:10px;">Show the bar first: <strong>Ctrl+Shift+B</strong> (Chrome/Edge). Drag the link up — don&apos;t click it here.</p>
           <div class="bookmarklet-box">
             <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
-            <p class="bookmarklet-help">WMT Worksheet View — one day + requests</p>
+            <p class="bookmarklet-help">WMT Worksheet View — one day, the detail column, notes, and requests. Drag this bookmark up again after updating.</p>
             <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
             <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
             <a id="wxBmBtn" class="bookmarklet-link bookmarklet-link-wx" href="#">✓ Copy Pre-Duty WX</a>
@@ -1171,21 +1286,34 @@
       </div>
     </div>
 
-    <!-- Requests panel -->
-    <div class="requests-wrap" id="requestsWrap" style="display:none;">
-      <div class="requests-header">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span class="requests-title">Requests</span>
-          <span class="req-badge" id="reqBadge">0</span>
+    <div class="side-column">
+      <!-- Requests panel -->
+      <div class="requests-wrap" id="requestsWrap" style="display:none;">
+        <div class="requests-header">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="requests-title">Requests</span>
+            <span class="req-badge" id="reqBadge">0</span>
+          </div>
+          <button onclick="toggleRequestsPanel()" style="
+            background:none;border:none;cursor:pointer;
+            color:var(--text-muted);font-size:16px;padding:2px 4px;
+            line-height:1;border-radius:4px;
+          " title="Hide requests" id="reqCollapseBtn">›</button>
         </div>
-        <button onclick="toggleRequestsPanel()" style="
-          background:none;border:none;cursor:pointer;
-          color:var(--text-muted);font-size:16px;padding:2px 4px;
-          line-height:1;border-radius:4px;
-        " title="Hide requests" id="reqCollapseBtn">›</button>
+        <div class="requests-body" id="requestsBody">
+          <div class="req-empty">No pending or denied requests</div>
+        </div>
       </div>
-      <div class="requests-body" id="requestsBody">
-        <div class="req-empty">No pending or denied requests</div>
+
+      <div class="notes-wrap" id="notesWrap">
+        <div class="notes-header">
+          <div>
+            <div class="notes-title">Shift Notes</div>
+            <div class="notes-date" id="notesDate"></div>
+          </div>
+          <button type="button" class="modal-item-add" onclick="addShiftNote()">+ Add note</button>
+        </div>
+        <div class="notes-body" id="notesBody"></div>
       </div>
     </div>
 
@@ -1197,7 +1325,8 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'count-2026-10-18a';
+  const BUILD_ID = 'notes-2026-10-30a';
+  const OD_BAR = { bg: 'rgba(142, 201, 242, 0.95)', text: '#14324a' };
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
   let staffingTargetsByDow = defaultStaffingTargetsByDow();
@@ -1253,6 +1382,11 @@
   let wxArea = 'AREA 1';
   let wxByArea = {};               // { 'AREA 1': ['AB', ...], ... } from the ZOB page
   const importRawByDate = {};      // last pasted WMT text per date (for rebuild/debug)
+  // Other duties kept by date + initials so Clear All Days does not wipe them.
+  let savedOdByDate = {};
+  // Shift notes for the day being viewed. Scheduler notes and notes typed here.
+  let notesByDate = {};
+  let dismissedNotesByDate = {};
 
   function normalizeWxArea(raw) {
     const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, ' ');
@@ -1545,6 +1679,9 @@
       wxArea,
       wxByArea: JSON.parse(JSON.stringify(wxByArea)),
       previewReqIds: [...previewReqIds],
+      savedOdByDate: JSON.parse(JSON.stringify(savedOdByDate)),
+      notesByDate: JSON.parse(JSON.stringify(notesByDate)),
+      dismissedNotesByDate: JSON.parse(JSON.stringify(dismissedNotesByDate)),
     };
   }
 
@@ -1576,6 +1713,9 @@
     syncWxAreaSelect();
     previewReqIds.clear();
     (state.previewReqIds || []).forEach(id => previewReqIds.add(String(id)));
+    savedOdByDate = state.savedOdByDate && typeof state.savedOdByDate === 'object' ? state.savedOdByDate : {};
+    notesByDate = state.notesByDate && typeof state.notesByDate === 'object' ? state.notesByDate : {};
+    dismissedNotesByDate = state.dismissedNotesByDate && typeof state.dismissedNotesByDate === 'object' ? state.dismissedNotesByDate : {};
   }
 
   function snapshot(label) {
@@ -2147,9 +2287,125 @@
     }
   }
 
+  function worksheetNotesText(doc) {
+    var ids = ['lblNotes','txtNotes','Notes','divNotes','taNotes','DailyNotes','lblDailyNotes','txtDailyNotes','worksheetNotes','lblWorksheetNotes','ShiftNotes','lblShiftNotes','txtShiftNotes','pnlNotes','txtAreaNotes','Comments','lblComments','txtComments','lblDailyLog','txtDailyLog'];
+    function textOf(el) {
+      if (!el) return '';
+      var tag = (el.tagName || '').toLowerCase();
+      if (tag === 'table') {
+        var rows = el.querySelectorAll('tr');
+        var lines = [];
+        for (var r = 0; r < rows.length; r++) {
+          var line = (rows[r].innerText || rows[r].textContent || '').replace(/\s+/g, ' ').trim();
+          if (line && !/^notes:?$/i.test(line)) lines.push(line);
+        }
+        return lines.join('\n\n');
+      }
+      var raw = (tag === 'textarea' || tag === 'input') ? (el.value || '') : (el.innerText || el.textContent || '');
+      return String(raw || '').replace(/\u00a0/g, ' ').trim();
+    }
+    for (var i = 0; i < ids.length; i++) {
+      var t = textOf(doc.getElementById(ids[i]));
+      if (t && t.length < 8000) return t;
+    }
+    var nodes = doc.querySelectorAll('h1,h2,h3,h4,legend,th,label,span,div,td,caption');
+    for (var n = 0; n < nodes.length; n++) {
+      var label = (nodes[n].innerText || nodes[n].textContent || '').replace(/\s+/g, ' ').trim();
+      if (label.length > 40) continue;
+      if (!/^notes:?$/i.test(label) && !/^shift notes:?$/i.test(label) && !/^daily notes:?$/i.test(label)) continue;
+      var box = nodes[n].nextElementSibling;
+      if (!box && nodes[n].parentElement) box = nodes[n].parentElement.nextElementSibling;
+      if (!box) continue;
+      var area = box.querySelector ? box.querySelector('textarea,input[type="text"]') : null;
+      var text = textOf(area || box);
+      if (text && text.length < 8000 && !/^notes:?$/i.test(text)) return text;
+    }
+    return '';
+  }
+
+  function extractWorksheetFromDoc(doc) {
+    var dateEl = doc.getElementById('lblSelectedDate');
+    if (!dateEl) return null;
+    var shiftTable = doc.getElementById('ScheduledShifts');
+    if (!shiftTable) return null;
+    var out = '===DATE===\n' + dateEl.textContent.trim() + '\n===SCHEDULE_START===\n';
+    var rows = shiftTable.querySelectorAll('tr');
+    var col = { sup: 1, cpc: 2, dev: 3, detail: -1 };
+    var headerKnown = false;
+    if (rows.length) {
+      var heads = rows[0].querySelectorAll('th,td');
+      for (var h = 0; h < heads.length; h++) {
+        var label = (heads[h].textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (!label) continue;
+        if (label === 'detail' || label.indexOf('detail') === 0) { col.detail = h; headerKnown = true; }
+        else if (label === 'dev' || label.indexOf('develop') === 0 || label === 'trainee' || label.indexOf('trainee') === 0) { col.dev = h; headerKnown = true; }
+        else if (label === 'cpc') { col.cpc = h; headerKnown = true; }
+        else if (label === 'sup' || label === 'cic' || label.indexOf('supervis') === 0) { col.sup = h; headerKnown = true; }
+      }
+    }
+    if (!headerKnown) {
+      for (var r = 1; r < rows.length; r++) {
+        if (rows[r].querySelectorAll('td').length > 4) { col.detail = 4; break; }
+      }
+    }
+    function cellNames(cell, wrap) {
+      var names = [];
+      if (!cell) return names;
+      var links = cell.querySelectorAll('a');
+      var bits = [];
+      if (links.length) {
+        for (var i = 0; i < links.length; i++) bits.push(links[i].textContent || '');
+      } else bits.push(cell.textContent || '');
+      for (var b = 0; b < bits.length; b++) {
+        var parts = String(bits[b]).trim().split(/[\s,]+/);
+        for (var p = 0; p < parts.length; p++) {
+          var t = parts[p].replace(/[()<>\[\]{}]/g, '').replace(/\s+/g, '');
+          if (/^[A-Za-z]{1,3}$/.test(t)) names.push(wrap(t.toUpperCase()));
+        }
+      }
+      return names;
+    }
+    for (var i = 1; i < rows.length; i++) {
+      var tds = rows[i].querySelectorAll('td');
+      if (tds.length < 3) continue;
+      var rawCode = (tds[0].textContent || '').trim();
+      if (!rawCode) continue;
+      var names = [];
+      cellNames(tds[col.sup], function(t){ return '(' + t + ')'; }).forEach(function(n){ names.push(n); });
+      cellNames(tds[col.cpc], function(t){ return t; }).forEach(function(n){ names.push(n); });
+      if (col.dev >= 0 && tds[col.dev]) cellNames(tds[col.dev], function(t){ return '<' + t + '>'; }).forEach(function(n){ names.push(n); });
+      if (col.detail >= 0 && tds[col.detail]) cellNames(tds[col.detail], function(t){ return '{' + t + '}'; }).forEach(function(n){ names.push(n); });
+      if (names.length) out += rawCode + '\n' + names.join(' ') + '\n';
+    }
+    var notes = worksheetNotesText(doc);
+    if (notes) out += '===NOTES_START===\n' + notes + '\n===NOTES_END===\n';
+    out += '===REQUESTS_START===\n';
+    out += 'CPC\tTYPE\tFROM\tTO\tWITH\tSTATUS\tINI\tREQUEST DATE\n';
+    function parseReqTable(tblId) {
+      var tbl = doc.getElementById(tblId);
+      if (!tbl) return;
+      var rs = tbl.querySelectorAll('tr');
+      for (var j = 1; j < rs.length; j++) {
+        var rtds = rs[j].querySelectorAll('td');
+        if (rtds.length < 6) continue;
+        var cols = [];
+        for (var c = 0; c < 8; c++) cols.push(rtds[c] ? rtds[c].textContent.trim() : '');
+        out += cols.join('\t') + '\n';
+      }
+    }
+    parseReqTable('tblShiftChange');
+    out += 'CPC\tTYPE\tFROM\tTO\tWITH\tSTATUS\tINI\tREQUEST DATE\n';
+    parseReqTable('tblXTECTE');
+    out += 'CPC\tTYPE\tFROM\tTO\tWITH\tSTATUS\tINI\tREQUEST DATE\n';
+    parseReqTable('tblSupRequests');
+    return out;
+  }
+
   function getPayPeriodBookmarkletCode() {
     return `(async function(){
       try{
+      ${extractWorksheetFromDoc.toString()}
+      ${worksheetNotesText.toString()}
       var INDEX_RE=/\\/Views\\/WorksheetView\\/Index\\/(\\d+)/i;
       var JOB_KEY='sgPayPeriodCopy';
       var myRun=(window.__sgPPRun=(window.__sgPPRun||0)+1);
@@ -2581,41 +2837,7 @@
         return {plan:plan,ppId:currentPayPeriodId(),nextPPId:getFollowingPayPeriodId(document)};
       }
       function extractDayText(doc){
-        var dateEl=doc.getElementById('lblSelectedDate');
-        if(!dateEl) return null;
-        var out='===DATE===\\n'+dateEl.textContent.trim()+'\\n===SCHEDULE_START===\\n';
-        var shiftTable=doc.getElementById('ScheduledShifts');
-        if(!shiftTable) return null;
-        var rows=shiftTable.querySelectorAll('tr');
-        for(var i=1;i<rows.length;i++){
-          var tds=rows[i].querySelectorAll('td');
-          if(tds.length<3) continue;
-          var rawCode=tds[0].textContent.trim();
-          if(!rawCode) continue;
-          var names=[];
-          tds[1].querySelectorAll('a').forEach(function(a){var t=a.textContent.trim().replace(/\\s+/g,'');if(t)names.push('('+t+')');});
-          tds[2].querySelectorAll('a').forEach(function(a){var t=a.textContent.trim().replace(/\\s+/g,'');if(t)names.push(t);});
-          if(tds.length>3){tds[3].querySelectorAll('a').forEach(function(a){var t=a.textContent.trim().replace(/\\s+/g,'');if(t)names.push('<'+t+'>');});}
-          if(names.length) out+=rawCode+'\\n'+names.join(' ')+'\\n';
-        }
-        out+='===REQUESTS_START===\\n';
-        out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';
-        function parseReqTable(tblId){
-          var tbl=doc.getElementById(tblId);
-          if(!tbl) return;
-          var rs=tbl.querySelectorAll('tr');
-          for(var j=1;j<rs.length;j++){
-            var rtds=rs[j].querySelectorAll('td');
-            if(rtds.length<6) continue;
-            out+=rtds[0].textContent.trim()+'\\t'+rtds[1].textContent.trim()+'\\t'+rtds[2].textContent.trim()+'\\t'+rtds[3].textContent.trim()+'\\t'+rtds[4].textContent.trim()+'\\t'+rtds[5].textContent.trim()+'\\t'+(rtds.length>6?rtds[6].textContent.trim():'')+'\\t'+(rtds.length>7?rtds[7].textContent.trim():'')+'\\n';
-          }
-        }
-        parseReqTable('tblShiftChange');
-        out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';
-        parseReqTable('tblXTECTE');
-        out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';
-        parseReqTable('tblSupRequests');
-        return out;
+        return extractWorksheetFromDoc(doc);
       }
       function dayUrlWithSelectDate(day,payPeriodId,selectDate){
         if(!selectDate) return null;
@@ -2821,7 +3043,13 @@
   }
 
   function getDayBookmarkletCode() {
-    return `(function(){try{var L={'2030-10':[20,30,30,30],'0500-9':[5,0,14,0],'1200-9':[12,0,21,0],'1400-9':[14,0,23,0],'1600':[16,0,24,0],'0000':[0,0,32,0],'2230':[22,30,30,30],'0600':[6,0,14,0],'0600-10':[6,0,16,0],'0600-9':[6,0,15,0],'0700':[7,0,15,0],'0700-10':[7,0,17,0],'0700-9':[7,0,16,0],'0800':[8,0,16,0],'1100-10':[11,0,21,0],'1200-10':[12,0,22,0],'1300':[13,0,21,0],'1300-10':[13,0,23,0],'1400':[14,0,22,0],'1500':[15,0,23,0],'0900':[9,0,17,0],'0700F':[7,0,15,0],'0800-10':[8,0,18,0],'0800-9':[8,0,17,0],'0000F':[0,0,32,0],'2230F':[22,30,30,30],'0530-7':[5,30,12,30],'0600F':[6,0,14,0],'0800F':[8,0,16,0],'1000-7':[10,0,17,0],'1200':[12,0,20,0],'1300-7':[13,0,20,0],'1300-9':[13,0,22,0],'1300F':[13,0,21,0],'1400F':[14,0,22,0],'1500F':[15,0,23,0],'1600F':[16,0,24,0],'1430':[14,30,22,30],'0730':[7,30,15,30],'0830':[8,30,16,30],'0900-10':[9,0,19,0],'1000':[10,0,18,0],'1100-9':[11,0,20,0],'1400-7':[14,0,21,0],'0600-7':[6,0,13,0],'0700-7':[7,0,14,0],'1400-10':[14,0,24,0],'0800-7':[8,0,15,0],'1500-9':[15,0,24,0],'2300F':[23,0,31,0],'2300':[23,0,31,0],'0630':[6,30,14,30],'2200-9':[22,0,31,0],'2300-9':[23,0,32,0],'0900-7':[9,0,16,0],'1600-7':[16,0,23,0],'1700-9':[17,0,26,0],'2200-10':[22,0,32,0],'0900-9':[9,0,17,0],'1200-7':[12,0,19,0],'2230-9':[22,30,31,30],'0730-7':[7,30,14,30],'1500-7':[15,0,22,0],'1000-10':[10,0,20,0],'1000-9':[10,0,19,0],'1100':[11,0,19,0],'1330':[13,30,21,30],'0630-7':[6,30,13,30],'2230-7':[22,30,29,30],'1100-7':[11,0,18,0],'1700-7':[17,0,24,0],'1615':[16,15,24,15],'1615-7':[16,15,23,15],'1700':[17,0,25,0],'2130':[21,30,29,30],'0530':[5,30,13,30],'1100F':[11,0,19,0],'2200':[22,0,30,0],'2100-10':[21,0,31,0],'0630-9':[6,30,15,30],'1200F':[12,0,20,0],'0500-10':[5,0,15,0],'0530-9':[5,30,14,30],'0530-10':[5,30,15,30],'1130':[11,30,19,30],'1530':[15,30,23,30],'2330-7':[23,30,30,30],'2130-9':[21,30,30,30],'1600-9':[16,0,25,0],'2300-7':[23,0,30,0],'1215-10':[12,15,22,15],'0000-7':[0,0,31,0],'1430-7':[14,30,21,30],'0600-10F':[6,0,16,0],'0900-10F':[9,0,19,0],'0400':[4,0,12,0],'1200-10F':[12,0,22,0],'0900F':[9,0,17,0],'2230-10':[22,30,32,30],'0930-7':[9,30,16,30],'0930':[9,30,17,30],'0630-10':[6,30,16,30],'1330-10':[13,30,23,30],'1300-10F':[13,0,23,0],'0000-9':[0,0,33,0],'0800-10F':[8,0,18,0],'1100-10F':[11,0,21,0],'0430-10':[4,30,14,30],'1330-9':[13,30,22,30],'0700-10F':[7,0,17,0],'1130-10':[11,30,21,30],'1430-9':[14,30,23,30],'0600-7F':[6,0,13,0],'1630':[16,30,24,30],'2345':[23,45,31,45],'0930-10':[9,30,19,30],'2100-10F':[21,0,31,0],'0545-6':[5,45,11,45],'0830-10':[8,30,18,30],'2345F':[23,45,31,45],'1400-10F':[14,0,24,0],'0500-6':[5,0,11,0],'2245':[22,45,30,45],'2245-9':[22,45,31,45],'2245F':[22,45,30,45],'0545-7':[5,45,12,45],'0700ADMIN':[7,0,15,30],'0500':[5,0,13,0],'0545':[5,45,13,45],'2100':[21,0,29,0]};function shiftEndTime(code){var c=code.toUpperCase().replace(/^(@D|@T|@|C|T|D)/,'').replace(/(TMC|OM)[\$\^!]?$/,'').replace(/[\$\^!]$/,'').replace(/^AREA/,'').trim();if(L[c]){return L[c];}var nf=c.replace(/F$/,'');if(L[nf]){return L[nf];}return null;}var dateEl=document.getElementById('lblSelectedDate');if(!dateEl){alert('Not on WMT Worksheet View page.');return;}var dateText=dateEl.textContent.trim();var out='===DATE===\\n'+dateText+'\\n===SCHEDULE_START===\\n';var shiftTable=document.getElementById('ScheduledShifts');if(!shiftTable){alert('Could not find ScheduledShifts table.');return;}var rows=shiftTable.querySelectorAll('tr');for(var i=1;i<rows.length;i++){var tds=rows[i].querySelectorAll('td');if(tds.length<3)continue;var rawCode=tds[0].textContent.trim();if(!rawCode)continue;var names=[];var supLinks=tds[1].querySelectorAll('a');for(var s=0;s<supLinks.length;s++){var st=supLinks[s].textContent.trim().replace(/\\s+/g,'');if(st)names.push('('+st+')');}var cpcLinks=tds[2].querySelectorAll('a');for(var c=0;c<cpcLinks.length;c++){var ct=cpcLinks[c].textContent.trim().replace(/\\s+/g,'');if(ct)names.push(ct);}if(tds.length>3){var devLinks=tds[3].querySelectorAll('a');for(var d=0;d<devLinks.length;d++){var dt=devLinks[d].textContent.trim().replace(/\\s+/g,'');if(dt)names.push('<'+dt+'>');}}if(names.length>0)out+=rawCode+'\\n'+names.join(' ')+'\\n';}out+='===REQUESTS_START===\\n';out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';function parseReqTable(tblId){var tbl=document.getElementById(tblId);if(!tbl)return;var rs=tbl.querySelectorAll('tr');for(var i=1;i<rs.length;i++){var tds=rs[i].querySelectorAll('td');if(tds.length<6)continue;out+=tds[0].textContent.trim()+'\\t'+tds[1].textContent.trim()+'\\t'+tds[2].textContent.trim()+'\\t'+tds[3].textContent.trim()+'\\t'+tds[4].textContent.trim()+'\\t'+tds[5].textContent.trim()+'\\t'+(tds.length>6?tds[6].textContent.trim():'')+'\\t'+(tds.length>7?tds[7].textContent.trim():'')+'\\n';}}parseReqTable('tblShiftChange');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblXTECTE');out+='CPC\\tTYPE\\tFROM\\tTO\\tWITH\\tSTATUS\\tINI\\tREQUEST DATE\\n';parseReqTable('tblSupRequests');navigator.clipboard.writeText(out).then(function(){},function(){alert('Clipboard access denied.');});}catch(e){alert('Bookmarklet error: '+e.message);}})();`;
+    return '(function(){try{' +
+      extractWorksheetFromDoc.toString() + '\n' +
+      worksheetNotesText.toString() + '\n' +
+      'var out=extractWorksheetFromDoc(document);' +
+      'if(!out){alert("Open WMT Worksheet View first.");return;}' +
+      'navigator.clipboard.writeText(out).then(function(){},function(){alert("Clipboard access denied.");});' +
+      '}catch(e){alert("Bookmarklet error: "+(e&&e.message?e.message:e));}})();';
   }
 
   function getWxBookmarkletCode() {
@@ -3231,10 +3459,13 @@
     return false;
   }
 
+  function isDetailToken(token) {
+    return /^\{[A-Z]{1,3}\}$/.test(String(token || '').replace(/[\$\^\!]$/, ''));
+  }
+
   function isInitials(token) {
-    // Strip outer brackets/parens (including double) and $ suffix before checking
-    const clean = token.replace(/^\[+|\]+$|^\(+|\)+$/g, '').replace(/[\$\^\!]$/, '');
-    return /^[A-Z]{1,3}$/.test(clean) || /^<[A-Z]{1,3}>$/.test(token);
+    const clean = String(token || '').replace(/^\[+|\]+$|^\(+|\)+$|^\{+|\}+$|^<|>$/g, '').replace(/[\$\^\!]$/, '');
+    return /^[A-Z]{1,3}$/.test(clean);
   }
 
   function isCIC(token) {
@@ -3247,7 +3478,7 @@
   }
 
   function cleanInitials(token) {
-    return token.replace(/^\[+|\]+$|^\(+|\)+$|^<|>$/g, '').replace(/[\$\^\!]$/, '');
+    return String(token || '').replace(/^\[+|\]+$|^\(+|\)+$|^\{+|\}+$|^<|>$/g, '').replace(/[\$\^\!]$/, '');
   }
 
   function countWorksheetDays(text) {
@@ -3265,6 +3496,121 @@
       .filter(s => s.startsWith('===DATE==='));
   }
 
+  function compactClock(decimal) {
+    const n = ((decimal % 24) + 24) % 24;
+    const h = Math.floor(n);
+    const m = Math.round((n - h) * 60);
+    return String(h).padStart(2, '0') + String(m).padStart(2, '0');
+  }
+
+  function fullShiftOd(shift) {
+    const start = opsStartOf(shift);
+    const end = opsEndOf(shift);
+    return {
+      id: 'detail-' + shift.name + '-' + start,
+      from: compactClock(start),
+      to: compactClock(end),
+      odStart: start,
+      odEnd: end,
+      removed: false,
+      autoDetail: true,
+      source: 'detail'
+    };
+  }
+
+  function applyOdForShift(shift, date) {
+    const saved = savedOdByDate[date] && savedOdByDate[date][shift.name];
+    if (saved && saved.userSet) {
+      shift.odList = JSON.parse(JSON.stringify(saved.items || []));
+      return;
+    }
+    if (shift.detail) {
+      shift.odList = [fullShiftOd(shift)];
+      return;
+    }
+    if (saved && Array.isArray(saved.items)) {
+      const manual = saved.items.filter(od => !od.autoDetail && !od.removed);
+      if (manual.length) shift.odList = JSON.parse(JSON.stringify(manual));
+    }
+  }
+
+  function rememberOd(date, name, odList) {
+    if (!date || !name) return;
+    if (!savedOdByDate[date]) savedOdByDate[date] = {};
+    const items = JSON.parse(JSON.stringify(odList || []));
+    items.forEach(od => { delete od._draftNew; });
+    savedOdByDate[date][name] = { userSet: true, items };
+  }
+
+  function backfillSavedOdFromShifts() {
+    Object.entries(schedulesByDate).forEach(([date, shifts]) => {
+      (shifts || []).forEach(shift => {
+        const items = shift.odList || [];
+        if (!items.some(od => !od.removed && od.odStart != null && !od.autoDetail)) return;
+        if (!savedOdByDate[date]) savedOdByDate[date] = {};
+        if (savedOdByDate[date][shift.name]) return;
+        const copy = JSON.parse(JSON.stringify(items));
+        copy.forEach(od => { delete od._draftNew; });
+        savedOdByDate[date][shift.name] = { userSet: true, items: copy };
+      });
+    });
+  }
+
+  function reapplySavedOd() {
+    Object.entries(schedulesByDate).forEach(([date, shifts]) => {
+      (shifts || []).forEach(shift => applyOdForShift(shift, date));
+    });
+  }
+
+  function shiftFullyOnOd(shift) {
+    const start = opsStartOf(shift);
+    const end = opsEndOf(shift);
+    return (shift.odList || []).some(od =>
+      !od.removed && od.odStart != null && od.odEnd != null &&
+      od.odStart <= start + 0.05 && od.odEnd >= end - 0.05
+    );
+  }
+
+  function noteKey(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function splitNoteEntries(text) {
+    const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!raw) return [];
+    const chunks = /\n\s*\n/.test(raw) ? raw.split(/\n\s*\n/) : raw.split('\n');
+    return chunks.map(s => s.trim()).filter(Boolean);
+  }
+
+  function extractImportedNotes(raw) {
+    const start = String(raw || '').indexOf('===NOTES_START===');
+    if (start === -1) return [];
+    let body = String(raw).slice(start + '===NOTES_START==='.length);
+    const end = body.indexOf('===NOTES_END===');
+    if (end !== -1) body = body.slice(0, end);
+    return splitNoteEntries(body);
+  }
+
+  function mergeSchedulerNotes(date, texts) {
+    if (!date) return;
+    if (!notesByDate[date]) notesByDate[date] = [];
+    if (!dismissedNotesByDate[date]) dismissedNotesByDate[date] = [];
+    const dismissed = new Set(dismissedNotesByDate[date]);
+    (texts || []).forEach(text => {
+      const key = noteKey(text);
+      if (!key || dismissed.has(key)) return;
+      const existing = notesByDate[date].find(n => n.sourceKey === key || noteKey(n.text) === key);
+      if (existing) return;
+      notesByDate[date].push({
+        id: Date.now() + Math.random(),
+        text: String(text).trim(),
+        sourceKey: key,
+        source: 'scheduler',
+        edited: false
+      });
+    });
+  }
+
   function importSingleDayBlock(raw) {
     let importedDate = null;
     const dateMatch = raw.match(/===DATE===\s*\n([^\n]+)/);
@@ -3274,8 +3620,16 @@
     }
 
     const schedStart = raw.indexOf('===SCHEDULE_START===');
-    const schedEnd = raw.indexOf('===REQUESTS_START===');
-    if (schedStart === -1) return { shifts: 0, date: importedDate };
+    const notesAt = raw.indexOf('===NOTES_START===');
+    const reqAt = raw.indexOf('===REQUESTS_START===');
+    let schedEnd = -1;
+    if (notesAt !== -1 && reqAt !== -1) schedEnd = Math.min(notesAt, reqAt);
+    else if (notesAt !== -1) schedEnd = notesAt;
+    else schedEnd = reqAt;
+    if (schedStart === -1) {
+      if (importedDate) mergeSchedulerNotes(importedDate, extractImportedNotes(raw));
+      return { shifts: 0, date: importedDate };
+    }
 
     const schedSection = raw.slice(
       schedStart + '===SCHEDULE_START==='.length,
@@ -3297,23 +3651,40 @@
           if (nextTokens.every(isInitials)) { initials = nextTokens; i++; }
         }
         initials.forEach(tok => {
+          const name = cleanInitials(tok);
+          const detail = isDetailToken(tok);
+          const existing = parsed.find(p =>
+            p.name === name &&
+            Math.abs(p.opsStart - shiftInfo.start) < 0.02 &&
+            Math.abs(p.opsEnd - shiftInfo.end) < 0.02
+          );
+          if (existing) {
+            if (detail) existing.detail = true;
+            if (isCIC(tok)) existing.cic = true;
+            if (isDev(tok)) existing.dev = true;
+            return;
+          }
           parsed.push({
             id: Date.now() + Math.random(),
-            name: cleanInitials(tok),
+            name,
             opsStart: shiftInfo.start,
             opsEnd: shiftInfo.end,
             start: shiftInfo.start,
             end: shiftInfo.end,
             role: 'Imported',
             cic: isCIC(tok),
-            dev: isDev(tok)
+            dev: isDev(tok),
+            detail
           });
         });
       }
       i++;
     }
 
-    if (parsed.length === 0) return { shifts: 0, date: importedDate };
+    if (parsed.length === 0) {
+      if (importedDate) mergeSchedulerNotes(importedDate, extractImportedNotes(raw));
+      return { shifts: 0, date: importedDate };
+    }
 
     const targetDate = importedDate || localDateStr();
     const targetDateObj = new Date(targetDate + 'T12:00:00');
@@ -3327,6 +3698,8 @@
     const prevDayShifts = parsed
       .filter(s => isOvernightOpsShift(s))
       .map(s => prepareImportedShift(s));
+    currentDayShifts.forEach(s => applyOdForShift(s, targetDate));
+    prevDayShifts.forEach(s => applyOdForShift(s, prevDate));
 
     const existingNightShifts = (schedulesByDate[targetDate] || []).filter(s => isOvernightOpsShift(s));
     if (currentDayShifts.length > 0) schedulesByDate[targetDate] = [...existingNightShifts, ...currentDayShifts];
@@ -3339,6 +3712,7 @@
     }
 
     importRawByDate[targetDate] = raw;
+    mergeSchedulerNotes(targetDate, extractImportedNotes(raw));
 
     const { requests: parsedReqs, tosToApply } = parseRequests(raw, targetDate);
     requestsByDate[targetDate] = mergeRequestsWithResolved(targetDate, parsedReqs);
@@ -3837,17 +4211,25 @@
     return [...approved, ...previewPartial];
   }
 
+  function isEntireShiftRequest(r) {
+    if (!r || r.isPartial || r.isTOS || isShiftChangeType(r.type) || isTOSType(r.type)) return false;
+    const from = String(r.from || '').trim().toLowerCase();
+    if (r.isLeave && !r.isPartial) return true;
+    return from === 'shift' || (from === '' && (r.isLeave || isLeaveType(r.type)));
+  }
+
+  function approvedWholeLeaveNames(date) {
+    return new Set(
+      (requestsByDate[date] || [])
+        .filter(r => r.resolvedAction === 'approve' && isEntireShiftRequest(r))
+        .map(r => r.cpc)
+    );
+  }
+
   function buildOnLeaveSet(allReqs, previewReqs) {
     return new Set([
-      ...allReqs.filter(r =>
-        !isShiftChangeType(r.type) &&
-        r.isLeave && !r.isPartial &&
-        r.resolvedAction === 'approve'
-      ).map(r => r.cpc),
-      ...previewReqs.filter(r =>
-        !isShiftChangeType(r.type) &&
-        r.isLeave && !r.isPartial
-      ).map(r => r.cpc),
+      ...allReqs.filter(r => isEntireShiftRequest(r) && r.resolvedAction === 'approve').map(r => r.cpc),
+      ...previewReqs.filter(r => isEntireShiftRequest(r)).map(r => r.cpc),
     ]);
   }
 
@@ -4277,6 +4659,7 @@
     let eveCount = 0;
     shifts.forEach(s => {
       if (onLeave.has(s.name)) return;
+      if (shiftFullyOnOd(s)) return;
       if (s.cic || isTraineeExcluded(s)) return;
       if (s.end >= 12 && s.end < 19) dayCount++;
       else if (s.end >= 19 && s.end <= 24) eveCount++;
@@ -4440,9 +4823,6 @@
     Object.keys(rowOrderByDate).forEach(k => delete rowOrderByDate[k]);
     Object.keys(importRawByDate).forEach(k => delete importRawByDate[k]);
     previewReqIds.clear();
-    wxInitials.clear();
-    wxDate = '';
-    wxByArea = {};
     purgeOrphanRequests();
     clearExtensionPendingImport();
   }
@@ -4651,8 +5031,11 @@
       rowOrderByDate[sortDate] = defaultOrder.map(([k]) => k);
     }
 
+    const approvedWholeLeave = approvedWholeLeaveNames(date);
+
     sortedEmployees.forEach(([rowKey, empShifts]) => {
       const name = rowKey.replace(/\u200B/g, '');
+      if (approvedWholeLeave.has(name)) return;
       html += `<div class="employee-row" draggable="true"
         data-rowkey="${rowKey}"
         ondragstart="rowDragStart(event,'${rowKey}')"
@@ -4687,9 +5070,11 @@
         // Check if a whole-shift leave is being previewed for this person
         const wholeLeavePreview = Array.from(previewReqIds).some(pid => {
           const r = (requestsByDate[date] || []).find(x => String(x.id) === pid);
-          return r && r.cpc === name && r.isLeave && !r.isPartial && !isTOSType(r.type);
+          return r && r.cpc === name && isEntireShiftRequest(r);
         });
-        const barBg = wholeLeavePreview ? 'rgba(130,130,145,0.6)' : col.bg;
+        const fullOd = shiftFullyOnOd(shift);
+        const barBg = wholeLeavePreview ? 'rgba(130,130,145,0.6)' : (fullOd ? OD_BAR.bg : col.bg);
+        const barFg = (!wholeLeavePreview && fullOd) ? OD_BAR.text : col.text;
         const core = toTimeline(opsStartOf(shift), opsEndOf(shift));
 
         // Green TOS overlays — portions outside the core shift (stored + previewed)
@@ -4717,7 +5102,7 @@
         // Yellow last-hour overlay: shifts ending at or before 21:00, not dev (trainee) or CIC
         // Skip if there is approved leave covering the last hour of the shift
         let yellowInner = '';
-        if (!shift.dev && !shift.cic && shift.end <= 21 && shift.end > shift.start) {
+        if (!fullOd && !shift.dev && !shift.cic && shift.end <= 21 && shift.end > shift.start) {
           const hasLeaveAtEnd = (requestsByDate[date] || []).some(r =>
             !r._leaveRemoved &&
             r.cpc === name && r.lvEnd != null && r.lvStart != null &&
@@ -4777,20 +5162,20 @@
           !od.removed && od.odStart != null && od.odEnd != null
         );
         let odOverlays = '';
-        otherDuties.forEach(od => {
-          const odVisStart = Math.max(od.odStart, visStart);
-          const odVisEnd   = Math.min(od.odEnd, visEnd);
+        if (!fullOd) otherDuties.forEach(od => {
+          const odVisStart = Math.max(toTimeline(od.odStart, od.odEnd).start, visStart);
+          const odVisEnd   = Math.min(toTimeline(od.odStart, od.odEnd).end, visEnd);
           if (odVisEnd <= odVisStart) return;
           const odLeft  = ((odVisStart - visStart) / (visEnd - visStart)) * 100;
           const odWidth = ((odVisEnd - odVisStart) / (visEnd - visStart)) * 100;
-          const odLabel = `OD ${formatTime(od.odStart)}–${formatTime(od.odEnd)}`;
+          const odLabel = `OD ${formatTime(od.odStart % 24)}–${formatTime(od.odEnd % 24)}`;
           const showOdLabel = odWidth >= Math.max(12, odLabel.length * 0.55);
           odOverlays += `<div style="
             position:absolute;left:${odLeft}%;width:${odWidth}%;top:0;bottom:0;
-            background:rgba(124,92,191,0.82);
+            background:${OD_BAR.bg};
             ${showOdLabel ? 'display:flex;align-items:center;justify-content:center;' : ''}
             font-family:var(--font-display);font-size:11px;font-weight:700;
-            color:#fff;letter-spacing:0.1px;
+            color:${OD_BAR.text};letter-spacing:0.1px;
             pointer-events:none;z-index:4;
             overflow:hidden;
           ">${showOdLabel ? odLabel : ''}</div>`;
@@ -4868,13 +5253,14 @@
           }
         });
 
-        otherDuties.forEach(od => {
-          const odVisStart = Math.max(od.odStart, visStart);
-          const odVisEnd   = Math.min(od.odEnd, visEnd);
+        if (!fullOd) otherDuties.forEach(od => {
+          const span = toTimeline(od.odStart, od.odEnd);
+          const odVisStart = Math.max(span.start, visStart);
+          const odVisEnd   = Math.min(span.end, visEnd);
           if (odVisEnd <= odVisStart) return;
           const odL = ((odVisStart - visStart) / (visEnd - visStart)) * 100;
           const odW = ((odVisEnd - odVisStart) / (visEnd - visStart)) * 100;
-          const odMid = (od.odStart + od.odEnd) / 2;
+          const odMid = (span.start + span.end) / 2;
           const shiftMid = (visStart + visEnd) / 2;
           if (odMid <= shiftMid) blueLeft = Math.max(blueLeft, odL + odW);
           else blueRight = Math.max(blueRight, 100 - odL);
@@ -4886,16 +5272,17 @@
           ? `<span style="position:absolute;left:4px;top:50%;transform:translateY(-50%);font-size:0.85em;font-weight:900;white-space:nowrap;pointer-events:none;z-index:10;"><span style="color:#22c55e;">✓</span> WX</span>`
           : '';
 
+        const odTag = fullOd ? `<span style="margin-left:6px;font-weight:700;">OD</span>` : '';
         const barContent = width > 18
-          ? `${gapBeforeStr ? `<span style="${gapBeforeStyle}margin-right:6px;font-size:0.85em;">${gapBeforeStr}</span>` : ''}<span style="font-weight:600;margin-right:6px;">${name}</span><span style="font-weight:500;">${label}</span><span style="opacity:0.85;margin-left:5px;font-size:0.85em;font-weight:500;">${durLabel}</span>${gapAfterStr ? `<span style="${gapAfterStyle}margin-left:6px;font-size:0.85em;">${gapAfterStr}</span>` : ''}`
+          ? `${gapBeforeStr ? `<span style="${gapBeforeStyle}margin-right:6px;font-size:0.85em;">${gapBeforeStr}</span>` : ''}<span style="font-weight:600;margin-right:6px;">${name}</span><span style="font-weight:500;">${label}</span><span style="opacity:0.85;margin-left:5px;font-size:0.85em;font-weight:500;">${durLabel}</span>${odTag}${gapAfterStr ? `<span style="${gapAfterStyle}margin-left:6px;font-size:0.85em;">${gapAfterStr}</span>` : ''}`
           : width > 10 || isNightRowShift(shift)
-          ? `<span style="font-weight:600;margin-right:5px;">${name}</span><span style="font-weight:500;">${label}</span>`
+          ? `<span style="font-weight:600;margin-right:5px;">${name}</span><span style="font-weight:500;">${label}</span>${odTag}`
           : width > 5
           ? `<span style="font-weight:600;">${name}</span>`
           : '';
 
         html += `<div class="shift-bar${shift._previewShiftChg ? ' visualize-glow' : ''}"
-          style="left:${left}%;width:${width}%;background:${barBg};color:${col.text};overflow:hidden;"
+          style="left:${left}%;width:${width}%;background:${barBg};color:${barFg};overflow:hidden;"
           data-id="${shift.id}" data-name="${name}" data-time="${label}"
           data-dur="${formatDuration(duration)}"
           data-start="${shift.start}" data-end="${shift.end}"
@@ -4935,6 +5322,7 @@
     const activeDate = getActiveDate();
     const shifts = getActiveShifts();
 
+    renderNotes();
     if (!shifts.length) {
       container.innerHTML = '';
       container.appendChild(empty);
@@ -5189,12 +5577,14 @@
     const odItems = shift.odList || [];
     const odList = document.getElementById('modalODList');
     odList.innerHTML = odItems.map(od => {
-      const label = `OD ${formatTime(od.odStart ?? 0)}–${formatTime(od.odEnd ?? 0)}`;
+      const range = `${compactClock(od.odStart ?? 0)}-${compactClock(od.odEnd ?? 0)}`;
       return `<div class="modal-item${od.removed ? ' removed' : ''}">
-        <span class="modal-item-label">${label}</span>
+        <span class="modal-item-label">OD</span>
         ${od.removed
-          ? `<button class="modal-item-remove" style="background:rgba(26,171,155,0.1);color:var(--accent3);border-color:rgba(26,171,155,0.3);" onclick="readdODFromModal('${od.id}')">Re-add</button>`
-          : `<button class="modal-item-remove" onclick="removeODFromModal('${od.id}')">Remove</button>`
+          ? `<span class="modal-item-label">${range}</span>
+             <button class="modal-item-remove" style="background:rgba(26,171,155,0.1);color:var(--accent3);border-color:rgba(26,171,155,0.3);" onclick="readdODFromModal('${od.id}')">Re-add</button>`
+          : `<input class="modal-od-time" value="${range}" aria-label="Other duties time" onchange="updateODTimeFromModal('${od.id}', this.value)" />
+             <button class="modal-item-remove" onclick="removeODFromModal('${od.id}')">Remove</button>`
         }
       </div>`;
     }).join('');
@@ -5278,8 +5668,20 @@
       real.tosList.forEach(t => { delete t._draftNew; });
     }
     if (next.odList) {
+      const odEdited = modalOdSignature(next.odList) !== modalOdSignature(draft.originalShift.odList);
+      if (!odEdited && (next.odList || []).filter(od => !od.removed && od.autoDetail).length === 1 &&
+          (next.odList || []).filter(od => !od.removed).length === 1) {
+        const od = next.odList.find(item => !item.removed && item.autoDetail);
+        if (od) {
+          od.odStart = next.opsStart;
+          od.odEnd = next.opsEnd;
+          od.from = compactClock(next.opsStart);
+          od.to = compactClock(next.opsEnd);
+        }
+      }
       real.odList = cloneModalData(next.odList);
       real.odList.forEach(t => { delete t._draftNew; });
+      rememberOd(draft.date, real.name, real.odList);
     }
     if (real.dev) real.countForStaffing = !!next.countForStaffing;
 
@@ -5352,6 +5754,33 @@
     if (!draft || !draft.shift.odList) return;
     const od = draft.shift.odList.find(t => String(t.id) === String(odId));
     if (od) od.removed = false;
+    refreshModalLists();
+  }
+
+  function updateODTimeFromModal(odId, value) {
+    const draft = _modalDraft;
+    if (!draft || !draft.shift.odList) return;
+    const od = draft.shift.odList.find(t => String(t.id) === String(odId));
+    if (!od || od.removed) return;
+    const range = parseTimeRange(value);
+    if (!range) {
+      alert('Enter time range as HHMM-HHMM, e.g. 1200-1300');
+      refreshModalLists();
+      return;
+    }
+    let { start, end } = range;
+    if (end <= start) end += 24;
+    if (end - start > 14) {
+      alert('Other duties cannot be longer than 14 hours.');
+      refreshModalLists();
+      return;
+    }
+    od.odStart = start;
+    od.odEnd = end;
+    od.from = compactClock(start);
+    od.to = compactClock(end);
+    od.autoDetail = false;
+    od.edited = true;
     refreshModalLists();
   }
 
@@ -5435,6 +5864,8 @@
       to:   rangeVal.split(/[-–]/)[1].trim(),
       odStart, odEnd,
       removed: false,
+      autoDetail: false,
+      source: 'manual',
       _draftNew: true
     });
 
@@ -5467,6 +5898,83 @@
     document.getElementById('addTOSRange').value = '';
     document.getElementById('addTOSForm').style.display = 'none';
     refreshModalLists();
+  }
+
+  function renderNotes() {
+    const body = document.getElementById('notesBody');
+    const dateEl = document.getElementById('notesDate');
+    if (!body) return;
+    const active = document.activeElement;
+    if (active && active.classList && active.classList.contains('note-text')) return;
+    const date = getActiveDate();
+    if (dateEl) dateEl.textContent = formatDateLabel(date);
+    const list = notesByDate[date] || [];
+    body.replaceChildren();
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'notes-empty';
+      empty.textContent = 'No shift notes';
+      body.appendChild(empty);
+      return;
+    }
+    list.forEach(note => {
+      const row = document.createElement('div');
+      row.className = 'note-row';
+      const ta = document.createElement('textarea');
+      ta.className = 'note-text';
+      ta.value = note.text || '';
+      ta.rows = 2;
+      ta.setAttribute('aria-label', 'Shift note');
+      ta.addEventListener('input', () => onNoteInput(note.id, ta.value));
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'note-remove';
+      btn.textContent = 'Remove';
+      btn.addEventListener('click', () => removeNote(note.id));
+      row.append(ta, btn);
+      body.appendChild(row);
+    });
+  }
+
+  function onNoteInput(id, value) {
+    const date = getActiveDate();
+    const note = (notesByDate[date] || []).find(n => String(n.id) === String(id));
+    if (!note) return;
+    note.text = value;
+    note.edited = true;
+    saveData();
+  }
+
+  function addShiftNote() {
+    const date = getActiveDate();
+    snapshot('Add note');
+    if (!notesByDate[date]) notesByDate[date] = [];
+    const note = {
+      id: Date.now() + Math.random(),
+      text: '',
+      source: 'user',
+      edited: true
+    };
+    notesByDate[date].push(note);
+    renderNotes();
+    const field = document.querySelector('.note-text:last-of-type');
+    if (field) field.focus();
+    saveData();
+  }
+
+  function removeNote(id) {
+    const date = getActiveDate();
+    const list = notesByDate[date] || [];
+    const note = list.find(n => String(n.id) === String(id));
+    if (!note) return;
+    snapshot('Remove note');
+    if (note.sourceKey) {
+      if (!dismissedNotesByDate[date]) dismissedNotesByDate[date] = [];
+      if (!dismissedNotesByDate[date].includes(note.sourceKey)) dismissedNotesByDate[date].push(note.sourceKey);
+    }
+    notesByDate[date] = list.filter(n => String(n.id) !== String(id));
+    renderNotes();
+    saveData();
   }
 
   // ── Persistence ──
@@ -5526,6 +6034,11 @@
       sanitizeRequests();
     }
     reapplySavedTos(data.savedTosByDate || data.manualTosByDate);
+    savedOdByDate = data.savedOdByDate && typeof data.savedOdByDate === 'object' ? data.savedOdByDate : {};
+    notesByDate = data.notesByDate && typeof data.notesByDate === 'object' ? data.notesByDate : {};
+    dismissedNotesByDate = data.dismissedNotesByDate && typeof data.dismissedNotesByDate === 'object' ? data.dismissedNotesByDate : {};
+    backfillSavedOdFromShifts();
+    reapplySavedOd();
     loadStaffingTargetsFromPayload(data);
   }
 
@@ -5576,6 +6089,9 @@
         wxDate,
         wxArea,
         wxByArea,
+        savedOdByDate,
+        notesByDate,
+        dismissedNotesByDate,
         activeDate: (document.getElementById('dateFilter') || {}).value || ''
       }));
     } catch(e) { console.warn('Save failed:', e); }
