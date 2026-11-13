@@ -135,6 +135,42 @@
     .menu-bookmarks[open] > summary { margin-bottom: 10px; }
     .menu-bookmarks > summary:hover { color: var(--text); }
 
+    .area-modal-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 20px 22px; width: min(760px, 96vw); max-height: 92vh; overflow-y: auto;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.25);
+    }
+    .area-modal-head { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+    .area-modal-head h2 { font-size:17px; font-weight:800; margin:0; flex:1; }
+    .area-modal-section { border-top:1px solid var(--border); padding-top:14px; margin-top:14px; }
+    .area-modal-section h3 {
+      font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em;
+      color:var(--text-muted); margin:0 0 8px;
+    }
+    .area-help { font-size:11px; color:var(--text-muted); line-height:1.4; margin:0 0 10px; }
+    .hourly-grid { border-collapse:collapse; font-family:var(--font-mono); font-size:11px; width:100%; }
+    .hourly-grid th { font-weight:600; color:var(--text-muted); padding:3px 2px; text-align:center; }
+    .hourly-grid td { padding:1px 2px; text-align:center; }
+    .hourly-grid td.hour-label { color:var(--text-muted); text-align:right; padding-right:8px; white-space:nowrap; }
+    .hourly-grid input {
+      width:100%; min-width:38px; max-width:64px; text-align:center; font-family:var(--font-mono); font-size:11px;
+      background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:2px 0;
+    }
+    .hourly-grid input:focus { outline:1px solid var(--accent); }
+    .area-btn-row { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .area-btn-row .btn { font-size:12px; padding:5px 10px; }
+    .legend-textarea {
+      width:100%; min-height:110px; font-family:var(--font-mono); font-size:11px; resize:vertical;
+      background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:8px;
+    }
+    .legend-list { border-collapse:collapse; width:100%; font-family:var(--font-mono); font-size:11px; margin-top:8px; }
+    .legend-list th { text-align:left; color:var(--text-muted); font-weight:600; padding:3px 6px; border-bottom:1px solid var(--border); }
+    .legend-list td { padding:3px 6px; border-bottom:1px solid var(--border); }
+    .legend-list button { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:12px; }
+    .legend-list button:hover { color:#d94f6e; }
+    .legend-summary { font-size:12px; margin-top:8px; }
+    .legend-skipped { font-size:11px; color:var(--text-muted); margin-top:6px; white-space:pre-wrap; font-family:var(--font-mono); }
+
     .menu-targets-table {
       margin-bottom: 10px;
     }
@@ -1186,15 +1222,19 @@
   </div>
 </div>
 
-<header>
-  <div class="header-left">
-    <div class="main-menu-wrap">
-      <button class="btn btn-ghost" type="button" onclick="toggleMainMenu()" id="mainMenuToggle" title="Menu">☰ Menu</button>
-      <div id="mainMenu" class="main-menu-panel">
-        <div class="menu-section">
-          <div class="menu-section-title">Staffing targets</div>
-          <p class="menu-settings-help">Set day/eve targets for each weekday. Header colors: green above, black at, yellow one under, red two+ under.</p>
-          <div class="menu-targets-table" id="staffTargetsTable">
+<div id="areaModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.35);align-items:center;justify-content:center;" onclick="if(event.target===this)closeAreaModal()">
+  <div class="area-modal-card">
+    <div class="area-modal-head">
+      <h2>Area setup</h2>
+      <select id="areaModalSelect" class="wx-area-select" aria-label="Area" onchange="onAreaModalSelect(this.value)"></select>
+      <button type="button" class="btn btn-ghost" onclick="closeAreaModal()">✕</button>
+    </div>
+    <p class="area-help">Everything here belongs to the selected area. Changing the area here also changes it in the header.</p>
+
+    <div class="area-modal-section" style="border-top:none;margin-top:0;padding-top:0;">
+      <h3>Day / Eve targets</h3>
+      <p class="area-help">Header colors: green above, black at, yellow one under, red two+ under.</p>
+          <div class="menu-targets-table" style="max-width:300px;" id="staffTargetsTable">
             <div class="menu-targets-row menu-targets-head">
               <span></span><span>Day #</span><span>Eve #</span>
             </div>
@@ -1206,7 +1246,47 @@
             <div class="menu-targets-row" data-dow="5"><span class="dow-label">Fri</span><input type="number" class="staff-target-day" min="0" max="99" step="1" aria-label="Friday day target" /><input type="number" class="staff-target-eve" min="0" max="99" step="1" aria-label="Friday eve target" /></div>
             <div class="menu-targets-row" data-dow="6"><span class="dow-label">Sat</span><input type="number" class="staff-target-day" min="0" max="99" step="1" aria-label="Saturday day target" /><input type="number" class="staff-target-eve" min="0" max="99" step="1" aria-label="Saturday eve target" /></div>
           </div>
-          <button type="button" class="btn btn-primary" style="width:100%;" onclick="applyStaffingTargetsFromMenu()" id="staffTargetApplyBtn">Apply targets</button>
+    </div>
+
+    <div class="area-modal-section">
+      <h3>Hourly targets</h3>
+      <p class="area-help">Minimum staffing for each hour shown on the graph. The hourly count turns yellow at one under and red at two or more under. Leave a box blank for no target. Hours after midnight belong to the day they follow.</p>
+      <div id="hourlyTargetsWrap"></div>
+      <div class="area-btn-row">
+        <button type="button" class="btn btn-ghost" onclick="copyHourlyMonToWeekdays()">Copy Mon → Tue–Fri</button>
+        <button type="button" class="btn btn-ghost" onclick="copyHourlySatToSun()">Copy Sat → Sun</button>
+        <button type="button" class="btn btn-ghost" onclick="resetHourlyTargets()">Reset to defaults</button>
+        <button type="button" class="btn btn-ghost" onclick="clearHourlyTargets()">Clear all</button>
+      </div>
+    </div>
+
+    <div class="area-modal-section">
+      <h3>Shift legend</h3>
+      <p class="area-help">Open the WMT Shift Legend page for this area, select the whole table, copy it, and paste it here. Shift Graph uses this list to set the start and end of each shift code when you import a schedule. Codes not in the list fall back to the built-in legend.</p>
+      <textarea id="legendPaste" class="legend-textarea" placeholder="Paste the shift legend here…"></textarea>
+      <div class="area-btn-row">
+        <button type="button" class="btn btn-primary" onclick="submitShiftLegend()">Interpret legend</button>
+        <button type="button" class="btn btn-ghost" onclick="clearShiftLegend()">Clear this area&apos;s legend</button>
+      </div>
+      <div id="legendResult"></div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
+      <button type="button" class="btn btn-ghost" onclick="closeAreaModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" id="areaSaveBtn" onclick="saveAreaTargets()">Save targets</button>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div class="header-left">
+    <div class="main-menu-wrap">
+      <button class="btn btn-ghost" type="button" onclick="toggleMainMenu()" id="mainMenuToggle" title="Menu">☰ Menu</button>
+      <div id="mainMenu" class="main-menu-panel">
+        <div class="menu-section">
+          <div class="menu-section-title">Area setup</div>
+          <p class="menu-settings-help">Staffing targets (day/eve and hourly) and the shift legend are saved separately for each area. Area: <strong id="menuAreaLabel">AREA 1</strong></p>
+          <button type="button" class="btn btn-primary" style="width:100%;" onclick="openAreaModal()">Open area setup…</button>
         </div>
         <details class="menu-section menu-bookmarks">
           <summary class="menu-section-title">Bookmarks</summary>
@@ -1259,6 +1339,10 @@
           <div class="field">
             <label>Employee Name</label>
             <input type="text" id="empName" placeholder="e.g. Jordan Lee" style="width:100%;" />
+          </div>
+          <div class="field">
+            <label>Shift (from area legend)</label>
+            <select id="addShiftCode" style="width:100%;" onchange="onAddShiftCodePick()"><option value="">Custom times</option></select>
           </div>
           <div style="display:flex;gap:10px;">
             <div class="field" style="flex:1;">
@@ -1347,7 +1431,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'menu-2026-11-13a';
+  const BUILD_ID = 'areas-2026-11-13c';
   const OD_BAR = { bg: 'rgba(142, 201, 242, 0.95)', text: '#14324a' };
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
@@ -1363,7 +1447,74 @@
 
   function getStaffingTargetsForDate(dateStr) {
     const dow = new Date(dateStr + 'T12:00:00').getDay();
-    return staffingTargetsByDow[dow] || { ...DEFAULT_STAFFING_TARGETS };
+    const prof = areaProfile();
+    return (prof.dowTargets && prof.dowTargets[dow]) || { ...DEFAULT_STAFFING_TARGETS };
+  }
+
+  // ── Area profiles ──
+  // areaProfiles[area] = { dowTargets:{0-6:{day,eve}}, hourly:{0-6:{hour:n}}, legend:[...], legendText, legendUpdated }
+  // Timeline hours 24/25 (0000/0100) belong to the ops day they follow.
+  let areaProfiles = {};
+
+  function defaultHourlyTargets() {
+    const out = {};
+    for (let d = 0; d < 7; d++) {
+      const row = {};
+      for (let h = 7; h < 20; h++) row[h] = 7;
+      if (d >= 1 && d <= 5) Object.assign(row, { 6: 4, 20: 8, 21: 5, 22: 3 });
+      out[d] = row;
+    }
+    return out;
+  }
+
+  function newAreaProfile() {
+    return {
+      dowTargets: JSON.parse(JSON.stringify(staffingTargetsByDow)),
+      hourly: defaultHourlyTargets(),
+      legend: [],
+      legendText: '',
+      legendUpdated: ''
+    };
+  }
+
+  function areaProfile(area) {
+    const key = area || wxArea || WX_AREAS[0];
+    if (!areaProfiles[key]) areaProfiles[key] = newAreaProfile();
+    const p = areaProfiles[key];
+    if (!p.dowTargets) p.dowTargets = defaultStaffingTargetsByDow();
+    if (!p.hourly) p.hourly = defaultHourlyTargets();
+    if (!Array.isArray(p.legend)) p.legend = [];
+    return p;
+  }
+
+  function hourlyTargetFor(dateStr, h) {
+    const dow = new Date(dateStr + 'T12:00:00').getDay();
+    const row = areaProfile().hourly[dow] || {};
+    const v = row[h];
+    return (v === undefined || v === null || v === '') ? null : Number(v);
+  }
+
+  function loadAreaProfilesFromPayload(data) {
+    areaProfiles = {};
+    const src = data && data.areaProfiles && typeof data.areaProfiles === 'object' ? data.areaProfiles : null;
+    if (src) {
+      Object.keys(src).forEach(k => {
+        const area = normalizeWxArea(k);
+        if (!area || !src[k] || typeof src[k] !== 'object') return;
+        areaProfiles[area] = src[k];
+        areaProfile(area);
+      });
+    } else {
+      // First run with area profiles: every area starts from the existing targets.
+      WX_AREAS.forEach(a => { areaProfiles[a] = newAreaProfile(); });
+    }
+  }
+
+  // Shift legend lookup for the active area: { KEY: [startDec, endDec] }
+  function areaLegendMap() {
+    const map = {};
+    areaProfile().legend.forEach(r => { if (r && r.key) map[r.key] = r; });
+    return map;
   }
 
   function loadStaffingTargetsFromPayload(data) {
@@ -1645,8 +1796,11 @@
 
   function onWxAreaChange() {
     wxArea = selectedWxArea();
+    syncStaffingTargetInputs();
+    refreshAddShiftCodes();
     if (!Object.keys(wxByArea).length) {
       saveData();
+      render();
       return;
     }
     snapshot(`WX area ${wxArea}`);
@@ -2058,7 +2212,7 @@
   }
 
   function importPayPeriodHTML(text) {
-    const keepDate = getActiveDate();
+    const keepDate = localDateStr(); // after a paste, show today (same as the Today button)
     const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
     if (normalized.includes('===DATE===') && normalized.includes('===SCHEDULE_START===')) {
       importFromText(text);
@@ -2274,7 +2428,7 @@
   }
 
   function importPayPeriodCompact(text) {
-    const keepDate = getActiveDate();
+    const keepDate = localDateStr(); // after a paste, show today (same as the Today button)
     const lines = text.split('\n').map(l => l.trim().replace(/\r/g, '')).filter(Boolean);
     const ppIdx = lines.indexOf('===PAY_PERIOD===');
     const schIdx = lines.indexOf('===PP_SCHEDULE===');
@@ -3153,9 +3307,12 @@
   }
 
   function syncStaffingTargetInputs() {
+    const ml = document.getElementById('menuAreaLabel');
+    if (ml) ml.textContent = wxArea;
+    const prof = areaProfile();
     document.querySelectorAll('#staffTargetsTable .menu-targets-row[data-dow]').forEach(row => {
       const dow = Number(row.dataset.dow);
-      const t = staffingTargetsByDow[dow] || DEFAULT_STAFFING_TARGETS;
+      const t = prof.dowTargets[dow] || DEFAULT_STAFFING_TARGETS;
       const dayIn = row.querySelector('.staff-target-day');
       const eveIn = row.querySelector('.staff-target-eve');
       if (dayIn) dayIn.value = String(t.day ?? DEFAULT_STAFFING_TARGETS.day);
@@ -3169,25 +3326,326 @@
     return Math.min(99, Math.max(0, Math.round(n)));
   }
 
-  function applyStaffingTargetsFromMenu() {
+  function readDowTargetInputs() {
+    const prof = areaProfile();
     document.querySelectorAll('#staffTargetsTable .menu-targets-row[data-dow]').forEach(row => {
       const dow = Number(row.dataset.dow);
       const dayIn = row.querySelector('.staff-target-day');
       const eveIn = row.querySelector('.staff-target-eve');
-      staffingTargetsByDow[dow] = {
+      prof.dowTargets[dow] = {
         day: normalizeStaffingTargetValue(dayIn?.value, DEFAULT_STAFFING_TARGETS.day),
         eve: normalizeStaffingTargetValue(eveIn?.value, DEFAULT_STAFFING_TARGETS.eve),
       };
     });
+  }
+
+  // ── Area setup modal ──
+  const DOW_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  function areaHours() {
+    const out = [];
+    for (let h = VIEW_START; h < VIEW_END; h++) out.push(h);
+    return out;
+  }
+
+  function openAreaModal() {
+    const menu = document.getElementById('mainMenu');
+    if (menu) menu.style.display = 'none';
+    const sel = document.getElementById('areaModalSelect');
+    if (sel) {
+      sel.innerHTML = WX_AREAS.map(a => `<option${a === wxArea ? ' selected' : ''}>${a}</option>`).join('');
+    }
+    fillAreaModal();
+    document.getElementById('areaModal').style.display = 'flex';
+  }
+
+  function closeAreaModal() {
+    document.getElementById('areaModal').style.display = 'none';
+  }
+
+  function fillAreaModal() {
     syncStaffingTargetInputs();
+    renderHourlyGrid(areaProfile().hourly);
+    const ta = document.getElementById('legendPaste');
+    if (ta) ta.value = '';
+    renderLegendResult(null);
+  }
+
+  function onAreaModalSelect(area) {
+    const a = normalizeWxArea(area);
+    if (!a) return;
+    const hs = document.getElementById('wxAreaSelect');
+    if (hs) hs.value = a;
+    onWxAreaChange();
+    fillAreaModal();
+  }
+
+  function renderHourlyGrid(hourly) {
+    const wrap = document.getElementById('hourlyTargetsWrap');
+    if (!wrap) return;
+    let html = '<table class="hourly-grid"><thead><tr><th></th>';
+    DOW_SHORT.forEach(d => { html += `<th>${d}</th>`; });
+    html += '</tr></thead><tbody>';
+    areaHours().forEach(h => {
+      html += `<tr><td class="hour-label">${axisHourLabel(h)}–${axisHourLabel(h + 1)}</td>`;
+      for (let d = 0; d < 7; d++) {
+        const v = hourly && hourly[d] && hourly[d][h];
+        const val = (v === undefined || v === null || v === '') ? '' : v;
+        html += `<td><input type="number" min="0" max="99" step="1" class="hourly-target" data-dow="${d}" data-h="${h}" value="${val}" aria-label="${DOW_SHORT[d]} ${axisHourLabel(h)} target" /></td>`;
+      }
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  }
+
+  function readHourlyGrid() {
+    const out = {};
+    for (let d = 0; d < 7; d++) out[d] = {};
+    document.querySelectorAll('#hourlyTargetsWrap input.hourly-target').forEach(inp => {
+      const raw = String(inp.value).trim();
+      if (raw === '') return;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return;
+      out[Number(inp.dataset.dow)][Number(inp.dataset.h)] = Math.min(99, Math.max(0, Math.round(n)));
+    });
+    return out;
+  }
+
+  function copyHourlyDays(fromDow, toDows) {
+    const grid = readHourlyGrid();
+    toDows.forEach(d => { grid[d] = { ...grid[fromDow] }; });
+    renderHourlyGrid(grid);
+  }
+  function copyHourlyMonToWeekdays() { copyHourlyDays(1, [2, 3, 4, 5]); }
+  function copyHourlySatToSun() { copyHourlyDays(6, [0]); }
+  function resetHourlyTargets() { renderHourlyGrid(defaultHourlyTargets()); }
+  function clearHourlyTargets() { renderHourlyGrid({}); }
+
+  function saveAreaTargets() {
+    readDowTargetInputs();
+    areaProfile().hourly = readHourlyGrid();
     saveData();
     render();
-    const btn = document.getElementById('staffTargetApplyBtn');
+    const btn = document.getElementById('areaSaveBtn');
     if (btn) {
       const orig = btn.textContent;
       btn.textContent = '✓ Saved';
       setTimeout(() => { btn.textContent = orig; }, 1600);
     }
+  }
+
+  // ── Shift legend parser ──
+  // Accepts the WMT Shift Legend table pasted as text: one shift per row
+  // (code, start, end, …) or one cell per line. Times may be HHMM, HH:MM,
+  // or a range like 0600-1600. Codes without times use HHMM[-hours].
+  const LEGEND_TIME_RE = /^(\d{1,2}):(\d{2})$|^(\d{4})$/;
+  const LEGEND_CODE_RE = /^(?:@T|@D|@|C|T|D)?\d{3,4}(?:-\d{1,2})?[A-Z]*$/i;
+
+  function legendTime(tok) {
+    const m = String(tok).match(LEGEND_TIME_RE);
+    if (!m) return null;
+    let h, mi;
+    if (m[3]) { h = Number(m[3].slice(0, 2)); mi = Number(m[3].slice(2)); }
+    else { h = Number(m[1]); mi = Number(m[2]); }
+    if (h > 24 || mi > 59) return null;
+    return h + mi / 60;
+  }
+
+  function legendTokens(line) {
+    return String(line).replace(/[|,;]/g, ' ').split(/\s+/).filter(Boolean).flatMap(t => {
+      // split time ranges like 0600-1600 or 06:00-16:00 (not shift codes like 0600-10)
+      const r = t.match(/^(\d{1,2}:\d{2}|\d{4})[-–](\d{1,2}:\d{2}|\d{4})$/);
+      return r ? [r[1], r[2]] : [t];
+    });
+  }
+
+  function legendKey(code) {
+    return String(code).toUpperCase().replace(/^(@T|@D|@|C|T|D)(?=\d)/, '');
+  }
+
+  function codeDefaultTimes(code) {
+    let c = legendKey(code).replace(/[A-Z]+$/, '');
+    let dur = 8;
+    const m = c.match(/^(\d{3,4})(?:-(\d{1,2}))?$/);
+    if (!m) return null;
+    if (m[2]) dur = Number(m[2]);
+    const t = m[1].padStart(4, '0');
+    const start = Number(t.slice(0, 2)) + Number(t.slice(2)) / 60;
+    return { start, end: start + dur };
+  }
+
+  function legendRow(code, start, end, note) {
+    // Same convention as the built-in legend: end after start; shifts that
+    // start before 0400 keep end > 24 so they land on the previous ops day.
+    let e = end;
+    if (e <= start) e += 24;
+    const hours = Math.round((e - start) * 100) / 100;
+    if (hours <= 0 || hours > 16) return null;
+    if (start < 4 && e < 24) e += 24;
+    return { code: String(code).toUpperCase(), key: legendKey(code), start, end: e, hours, note: (note || '').trim() };
+  }
+
+  function parseShiftLegendText(text) {
+    const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const rows = [];
+    const skipped = [];
+    const seen = new Set();
+    const push = (row, line) => {
+      if (!row) { if (line) skipped.push(line); return; }
+      if (seen.has(row.key)) return;
+      seen.add(row.key);
+      rows.push(row);
+    };
+
+    // Pass 1: one row per line
+    let lineHits = 0;
+    const pending = [];
+    lines.forEach(line => {
+      const toks = legendTokens(line);
+      const ci = toks.findIndex(t => LEGEND_CODE_RE.test(t));
+      if (ci < 0) { pending.push({ line, toks }); return; }
+      const code = toks[ci];
+      const rest = toks.slice(ci + 1);
+      const times = [];
+      const notes = [];
+      rest.forEach(t => {
+        const v = times.length < 2 ? legendTime(t) : null;
+        if (v !== null) times.push(v);
+        else if (!/^\d+(\.\d+)?$/.test(t)) notes.push(t);
+      });
+      if (times.length >= 2) {
+        lineHits++;
+        push(legendRow(code, times[0], times[1], notes.join(' ')), line);
+      } else {
+        pending.push({ line, toks, code });
+      }
+    });
+
+    // Pass 2: table copied one cell per line — walk all tokens in order
+    if (!lineHits) {
+      const toks = lines.flatMap(legendTokens);
+      for (let i = 0; i < toks.length; i++) {
+        if (!LEGEND_CODE_RE.test(toks[i])) continue;
+        const a = legendTime(toks[i + 1]);
+        const b = legendTime(toks[i + 2]);
+        if (a !== null && b !== null) {
+          const notes = [];
+          let j = i + 3;
+          while (j < toks.length && !LEGEND_CODE_RE.test(toks[j])) {
+            if (!/^\d+(\.\d+)?$/.test(toks[j])) notes.push(toks[j]);
+            j++;
+          }
+          push(legendRow(toks[i], a, b, notes.join(' ')));
+          i = j - 1;
+        }
+      }
+      if (rows.length) return { rows, skipped: [] };
+    }
+
+    // Lines with a code but no times: use the code itself (HHMM-hours)
+    pending.forEach(p => {
+      if (!p.code) {
+        if (/\d/.test(p.line)) skipped.push(p.line);
+        return;
+      }
+      const d = codeDefaultTimes(p.code);
+      const notes = p.toks.filter(t => t !== p.code && !/^\d+(\.\d+)?$/.test(t)).join(' ');
+      push(d ? legendRow(p.code, d.start, d.end, (notes ? notes + ' ' : '') + '(from code)') : null, p.line);
+    });
+    return { rows, skipped };
+  }
+
+  function submitShiftLegend() {
+    const ta = document.getElementById('legendPaste');
+    const text = ta ? ta.value : '';
+    if (!text.trim()) { alert('Paste the shift legend first.'); return; }
+    const { rows, skipped } = parseShiftLegendText(text);
+    if (!rows.length) {
+      renderLegendResult({ error: 'No shifts found in that text. Copy the whole Shift Legend table from WMT and try again.', skipped });
+      return;
+    }
+    rows.sort((a, b) => a.start - b.start || a.end - b.end || a.code.localeCompare(b.code));
+    const prof = areaProfile();
+    prof.legend = rows;
+    prof.legendText = text;
+    prof.legendUpdated = localDateStr();
+    saveData();
+    if (ta) ta.value = '';
+    renderLegendResult({ added: rows.length, skipped });
+    refreshAddShiftCodes();
+  }
+
+  function clearShiftLegend() {
+    const prof = areaProfile();
+    if (!prof.legend.length) return;
+    if (!confirm(`Clear the shift legend for ${wxArea}? Built-in shift times will be used instead.`)) return;
+    prof.legend = [];
+    prof.legendText = '';
+    prof.legendUpdated = '';
+    saveData();
+    renderLegendResult(null);
+    refreshAddShiftCodes();
+  }
+
+  function removeLegendRow(key) {
+    const prof = areaProfile();
+    prof.legend = prof.legend.filter(r => r.key !== key);
+    saveData();
+    renderLegendResult(null);
+    refreshAddShiftCodes();
+  }
+
+  function legendClock(dec) {
+    const v = ((dec % 24) + 24) % 24;
+    const h = Math.floor(v + 1e-6);
+    const m = Math.round((v - h) * 60);
+    return String(h).padStart(2, '0') + String(m).padStart(2, '0');
+  }
+
+  function escHtml(v) {
+    return String(v).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  }
+
+  function renderLegendResult(info) {
+    const box = document.getElementById('legendResult');
+    if (!box) return;
+    const prof = areaProfile();
+    let html = '';
+    if (info && info.error) html += `<div class="legend-summary" style="color:#d94f6e;">${escHtml(info.error)}</div>`;
+    if (info && info.added) html += `<div class="legend-summary" style="color:#22a06b;">✓ ${info.added} shifts saved for ${escHtml(wxArea)}. New imports will use these times.</div>`;
+    if (!prof.legend.length) {
+      html += `<div class="legend-summary" style="color:var(--text-muted);">No legend saved for ${escHtml(wxArea)} — using the built-in shift times.</div>`;
+    } else {
+      html += `<div class="legend-summary"><strong>${prof.legend.length}</strong> shifts for ${escHtml(wxArea)}${prof.legendUpdated ? ` · updated ${escHtml(prof.legendUpdated)}` : ''}</div>`;
+      html += '<table class="legend-list"><thead><tr><th>Code</th><th>Start</th><th>End</th><th>Hours</th><th>Note</th><th></th></tr></thead><tbody>';
+      prof.legend.forEach(r => {
+        html += `<tr><td>${escHtml(r.code)}</td><td>${legendClock(r.start)}</td><td>${legendClock(r.end)}</td><td>${r.hours}</td><td>${escHtml(r.note || '')}</td>` +
+          `<td><button type="button" title="Remove" onclick="removeLegendRow('${escHtml(r.key).replace(/'/g, '&#39;')}')">✕</button></td></tr>`;
+      });
+      html += '</tbody></table>';
+    }
+    if (info && info.skipped && info.skipped.length) {
+      html += `<div class="legend-skipped">Lines not understood (${info.skipped.length}):\n${escHtml(info.skipped.slice(0, 15).join('\n'))}${info.skipped.length > 15 ? '\n…' : ''}</div>`;
+    }
+    box.innerHTML = html;
+  }
+
+  function refreshAddShiftCodes() {
+    const sel = document.getElementById('addShiftCode');
+    if (!sel) return;
+    const rows = areaProfile().legend;
+    sel.innerHTML = '<option value="">Custom times</option>' + rows.map(r =>
+      `<option value="${escHtml(r.key)}">${escHtml(r.code)} · ${legendClock(r.start)}–${legendClock(r.end)}</option>`).join('');
+  }
+
+  function onAddShiftCodePick() {
+    const sel = document.getElementById('addShiftCode');
+    const row = sel && sel.value ? areaLegendMap()[sel.value] : null;
+    if (!row) return;
+    const fmt = d => { const c = legendClock(d); return c.slice(0, 2) + ':' + c.slice(2); };
+    document.getElementById('startTime').value = fmt(row.start);
+    document.getElementById('endTime').value = fmt(row.end);
   }
 
   function staffingCountColor(count, target) {
@@ -3449,6 +3907,12 @@
     // Normalize F suffix position (e.g. 0600-10F → keep, 0600F → keep)
     const upperT = t.toUpperCase().trim();
 
+    // 0. Area legend (pasted from WMT Shift Legend for the selected area)
+    const areaMap = areaLegendMap();
+    const areaHit = areaMap[upperT] || areaMap[upperT.replace(/F$/, '')];
+    if (areaHit) {
+      return { start: areaHit.start, end: areaHit.end, duration: areaHit.end - areaHit.start };
+    }
     // 1. Try exact legend lookup (with F)
     if (SHIFT_LEGEND[upperT]) {
       const [sh, sm, eh, em] = SHIFT_LEGEND[upperT];
@@ -3812,7 +4276,7 @@
 
   function importFromText(raw) {
     const btn = document.getElementById('pasteBtn');
-    const keepDate = getActiveDate();
+    const keepDate = localDateStr(); // after a paste, show today (same as the Today button)
     const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
 
     if (normalized.includes('===PAY_PERIOD===')) {
@@ -4817,8 +5281,11 @@
     const end = document.getElementById('endTime').value;
     if (!name) { alert('Please enter an employee name.'); return; }
     if (!start || !end) { alert('Please set start and end times.'); return; }
-    const s = parseTime(start), e = parseTime(end);
-    if (e <= s) { alert('End time must be after start time.'); return; }
+    const codeSel = document.getElementById('addShiftCode');
+    const picked = codeSel && codeSel.value ? areaLegendMap()[codeSel.value] : null;
+    let s = parseTime(start), e = parseTime(end);
+    if (picked) { s = picked.start; e = picked.end; }
+    else if (e <= s) { alert('End time must be after start time.'); return; }
     snapshot(`Add shift ${name}`);
     const dateVal = getActiveDate();
     if (!schedulesByDate[dateVal]) schedulesByDate[dateVal] = [];
@@ -4826,6 +5293,8 @@
     render();
     renderRequests();
     document.getElementById('empName').value = '';
+    const codeSelReset = document.getElementById('addShiftCode');
+    if (codeSelReset) codeSelReset.value = '';
     document.getElementById('addShiftDropdown').style.display = 'none';
   }
 
@@ -4983,9 +5452,6 @@
     // ── Hourly staffing counts (reflect previewed requests) ──
     const { hourCounts } = buildHourlyCountContext(date, displayShifts, previewReqs);
 
-    const dow = new Date(date + 'T12:00:00').getDay();
-    const isWeekday = dow >= 1 && dow <= 5;
-    const minStaff = isWeekday ? { 6:4, 7:6, 20:8, 21:5, 22:3 } : {};
 
     html += `<div class="chart-axis" style="height:22px;margin-bottom:4px;">`;
     html += `<div class="chart-axis-spacer"></div><div class="chart-axis-track">`;
@@ -4995,21 +5461,20 @@
       const leftPct  = ((h - VIEW_START) / span) * 100;
       const widthPct = (1 / span) * 100;
 
-      const isDayWindow = h >= 7 && h < 20; // 0700–2000 hour slots
+      const target = hourlyTargetFor(date, h);
       const slotLabel = formatHourSlot(h);
       const leaveNote = leaveOff.length ? ` −leave ${leaveOff.join(', ')}` : '';
       const odNote = (odOff || []).length ? ` −OD ${odOff.join(', ')}` : '';
-      const tip = `${slotLabel}: ${count}\n${names.join(', ')}${leaveNote}${odNote}`;
+      const targetNote = target !== null ? ` (target ${target})` : '';
+      const tip = `${slotLabel}: ${count}${targetNote}\n${names.join(', ')}${leaveNote}${odNote}`;
 
       let bgColor, textColor;
-      if (isDayWindow && count < 6) {
+      if (target !== null && target > 0 && count <= target - 2) {
         bgColor = 'rgba(217,79,110,0.4)'; textColor = '#9b1a34';
-      } else if (isDayWindow && count < 7) {
+      } else if (target !== null && target > 0 && count === target - 1) {
         bgColor = 'rgba(253,200,60,0.55)'; textColor = '#7a5a00';
       } else if (count === 0) {
         bgColor = 'transparent'; textColor = 'transparent';
-      } else if (minStaff[h24] !== undefined && count < minStaff[h24]) {
-        bgColor = 'rgba(217,79,110,0.35)'; textColor = '#9b1a34';
       } else {
         const intensity = Math.min(0.15 + (count / Math.max(displayShifts.length, 1)) * 0.5, 0.65);
         bgColor = `rgba(91,155,213,${intensity})`;
@@ -5058,7 +5523,17 @@
       const empMap = Object.fromEntries(defaultOrder);
       const ordered = savedOrder.filter(k => empMap[k]).map(k => [k, empMap[k]]);
       const newRows = defaultOrder.filter(([k]) => !savedOrder.includes(k));
-      sortedEmployees = [...ordered, ...newRows];
+      // Slot each new row (e.g. from + Add Shift) where it sorts by start time,
+      // just before the first existing row that would sort after it.
+      const defaultIdx = Object.fromEntries(defaultOrder.map(([k], i) => [k, i]));
+      newRows.forEach(entry => {
+        const idx = defaultIdx[entry[0]];
+        const at = ordered.findIndex(([k]) => defaultIdx[k] > idx);
+        if (at === -1) ordered.push(entry);
+        else ordered.splice(at, 0, entry);
+      });
+      if (newRows.length) rowOrderByDate[sortDate] = ordered.map(([k]) => k);
+      sortedEmployees = ordered;
       const dayRows   = sortedEmployees.filter(([, shifts]) => shifts.every(s => isDayRowShift(s)));
       const nightRows = sortedEmployees.filter(([, shifts]) => shifts.some(s  => isNightRowShift(s)));
       sortedEmployees = [...dayRows, ...nightRows];
@@ -6083,6 +6558,7 @@
     backfillSavedOdFromShifts();
     reapplySavedOd();
     loadStaffingTargetsFromPayload(data);
+    loadAreaProfilesFromPayload(data);
   }
 
   function collectSavedTos() {
@@ -6127,6 +6603,7 @@
         rowOrderByDate,
         importRawByDate,
         staffingTargetsByDow,
+        areaProfiles,
         savedTosByDate: collectSavedTos(),
         wxInitials: [...wxInitials],
         wxDate,
@@ -6176,6 +6653,7 @@
     loadData();
     syncWxAreaSelect();
     syncStaffingTargetInputs();
+    refreshAddShiftCodes();
     initBookmarkletLinks();
     console.info('Shift Graph build:', BUILD_ID);
     updateUndoRedoBtns();
