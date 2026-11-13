@@ -116,6 +116,25 @@
       border-top: 1px solid var(--border);
     }
 
+    .menu-bookmarks > summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 0;
+      user-select: none;
+    }
+    .menu-bookmarks > summary::-webkit-details-marker { display: none; }
+    .menu-bookmarks > summary::before {
+      content: '▸';
+      display: inline-block;
+      transition: transform .15s;
+    }
+    .menu-bookmarks[open] > summary::before { transform: rotate(90deg); }
+    .menu-bookmarks[open] > summary { margin-bottom: 10px; }
+    .menu-bookmarks > summary:hover { color: var(--text); }
+
     .menu-targets-table {
       margin-bottom: 10px;
     }
@@ -1173,21 +1192,6 @@
       <button class="btn btn-ghost" type="button" onclick="toggleMainMenu()" id="mainMenuToggle" title="Menu">☰ Menu</button>
       <div id="mainMenu" class="main-menu-panel">
         <div class="menu-section">
-          <div class="menu-section-title">Bookmarks</div>
-          <p class="bookmarklet-help" style="margin-bottom:10px;">Show the bar first: <strong>Ctrl+Shift+B</strong> (Chrome/Edge). Drag the link up — don&apos;t click it here.</p>
-          <div class="bookmarklet-box">
-            <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
-            <p class="bookmarklet-help">WMT Worksheet View — one day, the detail column, notes, and requests. Drag this bookmark up again after updating.</p>
-            <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
-            <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
-            <a id="wxBmBtn" class="bookmarklet-link bookmarklet-link-wx" href="#">✓ Copy Pre-Duty WX</a>
-            <p class="bookmarklet-help">On the ZOB pre-duty tab, click this bookmark, then click Pre-Duty WX on the graph.</p>
-            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
-            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
-            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('wx')">Can&apos;t drag? Copy pre-duty WX bookmark URL</button>
-          </div>
-        </div>
-        <div class="menu-section">
           <div class="menu-section-title">Staffing targets</div>
           <p class="menu-settings-help">Set day/eve targets for each weekday. Header colors: green above, black at, yellow one under, red two+ under.</p>
           <div class="menu-targets-table" id="staffTargetsTable">
@@ -1204,6 +1208,21 @@
           </div>
           <button type="button" class="btn btn-primary" style="width:100%;" onclick="applyStaffingTargetsFromMenu()" id="staffTargetApplyBtn">Apply targets</button>
         </div>
+        <details class="menu-section menu-bookmarks">
+          <summary class="menu-section-title">Bookmarks</summary>
+          <p class="bookmarklet-help" style="margin-bottom:10px;">Show the bar first: <strong>Ctrl+Shift+B</strong> (Chrome/Edge). Drag the link up — don&apos;t click it here.</p>
+          <div class="bookmarklet-box">
+            <a id="bmBtn" class="bookmarklet-link" href="#">📋 Copy Day Schedule</a>
+            <p class="bookmarklet-help">WMT Worksheet View — one day, the detail column, notes, and requests. Drag this bookmark up again after updating.</p>
+            <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
+            <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
+            <a id="wxBmBtn" class="bookmarklet-link bookmarklet-link-wx" href="#">✓ Copy Pre-Duty WX</a>
+            <p class="bookmarklet-help">On the ZOB pre-duty tab, click this bookmark, then click Pre-Duty WX on the graph.</p>
+            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
+            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
+            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('wx')">Can&apos;t drag? Copy pre-duty WX bookmark URL</button>
+          </div>
+        </details>
       </div>
     </div>
     <div class="logo">
@@ -1328,7 +1347,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'notes-2026-10-30a';
+  const BUILD_ID = 'menu-2026-11-13a';
   const OD_BAR = { bg: 'rgba(142, 201, 242, 0.95)', text: '#14324a' };
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
@@ -2823,7 +2842,6 @@
       async function openFollowingPayPeriod(nextPPId,lastCurrentKey){
         if(!payPeriodSelect(document)) throw new Error('Pay period dropdown not found');
         var planned=buildNextPeriodDayList(document,nextPPId);
-        showToast('Selecting next pay period in dropdown…','progress');
         var nextDoc=await selectPayPeriod(nextPPId);
         var probe=planned&&planned.length?planned[0]:{dayNum:1,href:indexHref(1),label:''};
         var firstText=await fetchDay(probe,null,nextPPId,probe.selectDate||null);
