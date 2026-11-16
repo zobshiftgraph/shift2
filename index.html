@@ -1431,7 +1431,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'areas-2026-11-13c';
+  const BUILD_ID = 'xte-2026-11-16a';
   const OD_BAR = { bg: 'rgba(142, 201, 242, 0.95)', text: '#14324a' };
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
@@ -2046,16 +2046,17 @@
   function sortEmployeeRowEntries(byEmployee, date, previewStable = false) {
     const entries = Object.entries(byEmployee).sort((a, b) => {
       if (previewStable) {
-        const aStart = Math.min(...a[1].map(s => s._origStart ?? opsStartOf(s)));
-        const bStart = Math.min(...b[1].map(s => s._origStart ?? opsStartOf(s)));
+        // Approved XTE/TOS before or after the shift counts as the new start/end.
+        const aStart = Math.min(...a[1].map(s => (s._origStart ?? opsStartOf(s)) - tosExtension(s).before));
+        const bStart = Math.min(...b[1].map(s => (s._origStart ?? opsStartOf(s)) - tosExtension(s).before));
         if (aStart !== bStart) return aStart - bStart;
         const aEnd = Math.max(...a[1].map(s => {
-          if (s._origStart !== undefined) return s._origStart + (opsEndOf(s) - opsStartOf(s));
-          return opsEndOf(s);
+          if (s._origStart !== undefined) return s._origStart + (opsEndOf(s) - opsStartOf(s)) + tosExtension(s).after;
+          return opsEndOf(s) + tosExtension(s).after;
         }));
         const bEnd = Math.max(...b[1].map(s => {
-          if (s._origStart !== undefined) return s._origStart + (opsEndOf(s) - opsStartOf(s));
-          return opsEndOf(s);
+          if (s._origStart !== undefined) return s._origStart + (opsEndOf(s) - opsStartOf(s)) + tosExtension(s).after;
+          return opsEndOf(s) + tosExtension(s).after;
         }));
         return aEnd - bEnd;
       }
@@ -2067,6 +2068,18 @@
     const dayRows   = entries.filter(([, shifts]) => shifts.every(s => isDayRowShift(s)));
     const nightRows = entries.filter(([, shifts]) => shifts.some(s  => isNightRowShift(s)));
     return [...dayRows, ...nightRows];
+  }
+
+  // Hours of approved XTE/TOS that fall before the shift start / after the shift end.
+  function tosExtension(shift) {
+    const core = toTimeline(opsStartOf(shift), opsEndOf(shift));
+    let before = 0, after = 0;
+    activeTOSList(shift).forEach(t => {
+      const span = toTimeline(t.tosStart, t.tosEnd);
+      before = Math.max(before, core.start - span.start);
+      after = Math.max(after, span.end - core.end);
+    });
+    return { before, after };
   }
 
   function refreshRowOrder(date) {
@@ -5161,8 +5174,9 @@
       if (onLeave.has(s.name)) return;
       if (shiftFullyOnOd(s)) return;
       if (s.cic || isTraineeExcluded(s)) return;
-      if (s.end >= 12 && s.end < 19) dayCount++;
-      else if (s.end >= 19 && s.end <= 24) eveCount++;
+      const end = s.end + tosExtension(s).after; // XTE after the shift is the new end
+      if (end >= 12 && end < 19) dayCount++;
+      else if (end >= 19 && end <= 24) eveCount++;
     });
     return { dayCount, eveCount };
   }
@@ -5172,8 +5186,8 @@
     return slotOverlap(vis, hour) >= 0.5;
   }
 
-  function inLastHourOfShift(shift, hour) {
-    const { end } = toTimeline(opsStartOf(shift), opsEndOf(shift));
+  function inLastHourOfShift(shift, hour, date) {
+    const { end } = shiftBarSpan(shift, date); // includes XTE after the shift
     return end > hour && end <= hour + 1;
   }
 
@@ -5196,7 +5210,7 @@
         if (!shiftCountsInHour(s, h, countDate)) return;
         if (isDayStaffing) {
           if (s.cic || isTraineeExcluded(s)) return;
-          if (inLastHourOfShift(s, h)) return;
+          if (inLastHourOfShift(s, h, countDate)) return;
         } else if (isEveningStaffing) {
           if (isTraineeExcluded(s)) return;
         }
