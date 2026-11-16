@@ -1431,7 +1431,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'xte-2026-11-16a';
+  const BUILD_ID = 'midreq-2026-11-16a';
   const OD_BAR = { bg: 'rgba(142, 201, 242, 0.95)', text: '#14324a' };
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
@@ -4228,8 +4228,11 @@
     mergeSchedulerNotes(targetDate, extractImportedNotes(raw));
 
     const { requests: parsedReqs, tosToApply } = parseRequests(raw, targetDate);
-    requestsByDate[targetDate] = mergeRequestsWithResolved(targetDate, parsedReqs);
-    tosToApply.forEach(t => applyTosToShift(targetDate, t.cpc, t.from, t.to, t.type));
+    // Mid-shift people are drawn on the previous day's graph, so their requests go there too.
+    const midNames = new Set(prevDayShifts.map(s => s.name));
+    currentDayShifts.forEach(s => midNames.delete(s.name));
+    routeImportedRequests(targetDate, prevDate, midNames, parsedReqs);
+    tosToApply.forEach(t => applyTosToShift(midNames.has(t.cpc) ? prevDate : targetDate, t.cpc, t.from, t.to, t.type));
 
     return { shifts: parsed.length, date: targetDate };
   }
@@ -4518,6 +4521,39 @@
     return [...merged, ...extras];
   }
 
+  // Requests on worksheet day `date` for people working a mid shift belong on
+  // `prevDate`, where that shift is displayed. They are tagged _midFrom = date.
+  function routeImportedRequests(date, prevDate, midNames, parsedReqs) {
+    const isMid = r => midNames.has(r.cpc);
+    const dayReqs = parsedReqs.filter(r => !isMid(r));
+    const midReqs = parsedReqs.filter(isMid).map(r => ({ ...r, date: prevDate, _midFrom: date }));
+
+    const here = requestsByDate[date] || [];
+    const fromNextDay = here.filter(r => r._midFrom);
+    // Drop mid-shift rows left here by older versions; keep anything typed by hand.
+    requestsByDate[date] = here.filter(r => !r._midFrom && (r._manual || !isMid(r)));
+    requestsByDate[date] = [...mergeRequestsWithResolved(date, dayReqs), ...fromNextDay];
+
+    const prev = requestsByDate[prevDate] || [];
+    const others = prev.filter(r => r._midFrom !== date);
+    if (midReqs.length || others.length !== prev.length) {
+      requestsByDate[prevDate] = prev.filter(r => r._midFrom === date);
+      const merged = mergeRequestsWithResolved(prevDate, midReqs)
+        .filter(r => midReqs.some(m => requestMatchKey(m) === requestMatchKey(r)))
+        .map(r => ({ ...r, date: prevDate, _midFrom: date }));
+      requestsByDate[prevDate] = [...others, ...merged];
+    }
+  }
+
+  function midNamesForWorksheetDate(date) {
+    const d = new Date(date + 'T12:00:00');
+    d.setDate(d.getDate() - 1);
+    const prevDate = localDateStr(d);
+    const names = new Set((schedulesByDate[prevDate] || []).filter(s => isOvernightOpsShift(s)).map(s => s.name));
+    (schedulesByDate[date] || []).filter(s => isDayOpsShift(s)).forEach(s => names.delete(s.name));
+    return { prevDate, names };
+  }
+
   function getRequestsForPanel(date) {
     return (requestsByDate[date] || []).filter(r => {
       if (r.status === 'approved-partial' && r.lvStart != null && r.lvEnd != null) return false;
@@ -4540,7 +4576,8 @@
       const { requests: parsedReqs } = parseRequests(raw, date);
       const panelRows = getRequestsForPanel(date);
       if (panelRows.length === 0 && parsedReqs.length > 0) {
-        requestsByDate[date] = mergeRequestsWithResolved(date, parsedReqs);
+        const { prevDate, names } = midNamesForWorksheetDate(date);
+        routeImportedRequests(date, prevDate, names, parsedReqs);
       }
     });
     purgeOrphanRequests();
