@@ -325,7 +325,6 @@
     }
 
     .bookmarklet-link-pp { background: #7ec8a4; }
-    .bookmarklet-link-wx { background: #5b9bd5; color: #fff; }
 
     .bookmarklet-help {
       font-size: 11px;
@@ -1296,11 +1295,8 @@
             <p class="bookmarklet-help">WMT Worksheet View — one day, the detail column, notes, and requests. Drag this bookmark up again after updating.</p>
             <a id="ppBtn" class="bookmarklet-link bookmarklet-link-pp" href="#">📅 Copy Pay Period</a>
             <p class="bookmarklet-help">WMT Worksheet View — current pay period plus the following pay period</p>
-            <a id="wxBmBtn" class="bookmarklet-link bookmarklet-link-wx" href="#">✓ Copy Pre-Duty WX</a>
-            <p class="bookmarklet-help">On the ZOB pre-duty tab, click this bookmark, then click Pre-Duty WX on the graph.</p>
             <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('day')">Can&apos;t drag? Copy day bookmark URL</button>
             <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('pp')">Can&apos;t drag? Copy pay period bookmark URL</button>
-            <button type="button" class="bookmarklet-copy-url" onclick="copyBookmarkletUrl('wx')">Can&apos;t drag? Copy pre-duty WX bookmark URL</button>
           </div>
         </details>
       </div>
@@ -1431,7 +1427,7 @@
   // ── Timeline constants ──
   let VIEW_START = 4;
   let VIEW_END = 26;
-  const BUILD_ID = 'midreq-2026-11-16a';
+  const BUILD_ID = 'midreq-2026-11-16b';
   const OD_BAR = { bg: 'rgba(142, 201, 242, 0.95)', text: '#14324a' };
 
   const DEFAULT_STAFFING_TARGETS = { day: 10, eve: 10 };
@@ -1739,9 +1735,8 @@
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;width:90%;max-width:480px;box-shadow:0 12px 40px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
         <div style="font-size:16px;font-weight:700;margin-bottom:6px;">✓ Paste Pre-Duty WX</div>
         <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
-          On the ZOB pre-duty page, click the <strong>Copy Pre-Duty WX</strong> bookmark, then click this button again.
+          The pre-duty list could not be read automatically. Press <strong>Ctrl+V</strong> to paste initials.
           The area menu chooses which completions get a ✓ WX mark.
-          Or press <strong>Ctrl+V</strong> to paste initials.
         </div>
         <textarea id="wxTA" style="width:100%;height:60px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-mono);font-size:12px;padding:10px;resize:none;outline:none;opacity:0.5;" placeholder="Waiting for paste (Ctrl+V)..."></textarea>
         <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
@@ -3255,41 +3250,12 @@
       '}catch(e){alert("Bookmarklet error: "+(e&&e.message?e.message:e));}})();';
   }
 
-  function getWxBookmarkletCode() {
-    return `(function(){try{
-      var LIST='2797cca5-641b-410c-a956-dd3b32db05bc';
-      var root=location.origin+'/AJO/PredutyWX/TCOB';
-      function nyKey(d){try{return new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);}catch(e){var z=new Date(d.getTime()-4*3600000);return z.getUTCFullYear()+'-'+String(z.getUTCMonth()+1).padStart(2,'0')+'-'+String(z.getUTCDate()).padStart(2,'0');}}
-      function parseSpDate(v){if(!v)return null;var m=String(v).match(/Date\\((\\d+)/);if(m)return new Date(Number(m[1]));var d=new Date(v);return isNaN(d)?null:d;}
-      function areaOf(raw){var s=String(raw||'').trim().toUpperCase().replace(/\\s+/g,' ');if(s==='TMU')return 'TMU';var m=s.match(/^AREA\\s*([1-8])$/);return m?('AREA '+m[1]):'';}
-      function addCode(bag,area,raw){String(raw||'').toUpperCase().split(/[^A-Z]+/).forEach(function(code){if(code.length!==2||!area)return;var key=area+'\\t'+code;if(!bag[key])bag[key]=true;});}
-      var today=nyKey(new Date());
-      var start=new Date(Date.now()-36*3600000).toISOString().replace(/\\.\\d+Z$/,'');
-      var url=root+"/_api/web/lists(guid'"+LIST+"')/items?$select=AREA,INITIALS,INITIALS2,DATE_x002f_TIME&$orderby=DATE_x002f_TIME desc&$top=500&$filter=DATE_x002f_TIME ge datetime'"+start+"'";
-      function fromDom(){var box=document.getElementById('WebPartWPQ2');if(!box)return [];var area='';var lines=[];box.querySelectorAll('tr').forEach(function(tr){var gb=tr.querySelector('.ms-gb,.ms-gb2');if(gb){var t=gb.textContent.replace(/\\s+/g,' ').trim();var m=t.match(/AREA\\s*[1-8]|TMU/i);area=m?areaOf(m[0]):'';return;}if(!area)return;tr.querySelectorAll('td').forEach(function(td){var cell=td.textContent.trim();if(/^[A-Za-z]{2}$/.test(cell))lines.push(area+'\\t'+cell.toUpperCase());});});return lines;}
-      function finish(lines){var uniq=[];var seen={};lines.forEach(function(line){if(!seen[line]){seen[line]=true;uniq.push(line);}});if(!uniq.length){alert('No pre-duty initials found for today. Expand today\\'s area groups on the ZOB page and click the bookmark again.');return;}
-        var text='===PREDUTY WX===\\n'+uniq.join('\\n');
-        navigator.clipboard.writeText(text).then(function(){alert('Copied '+uniq.length+' pre-duty entries. In Shift Graph, pick an area and click Paste Pre-Duty WX.');},function(){prompt('Copy this into Shift Graph:',text);});
-      }
-      fetch(url,{credentials:'same-origin',headers:{Accept:'application/json;odata=verbose'}}).then(function(r){if(!r.ok)throw new Error('list '+r.status);return r.json();}).then(function(data){
-        var rows=(data.d&&data.d.results)||[];
-        var bag={};
-        rows.forEach(function(item){var when=parseSpDate(item.DATE_x002f_TIME);if(when&&nyKey(when)!==today)return;var area=areaOf(item.AREA);addCode(bag,area,item.INITIALS);addCode(bag,area,item.INITIALS2);});
-        var lines=Object.keys(bag);
-        if(!lines.length)lines=fromDom();
-        finish(lines);
-      }).catch(function(){var lines=fromDom();if(lines.length)finish(lines);else alert('Could not read the ZOB pre-duty list. Open https://ksn2.faa.gov/AJO/PredutyWX/TCOB/SitePages/ZOB.aspx and click this bookmark there.');});
-    }catch(e){alert('Pre-duty bookmark error: '+(e&&e.message?e.message:e));}})();`;
-  }
-
   function initBookmarkletLinks() {
     const bm = document.getElementById('bmBtn');
     const pp = document.getElementById('ppBtn');
-    const wx = document.getElementById('wxBmBtn');
     if (bm) bm.href = 'javascript:' + encodeURIComponent(getDayBookmarkletCode());
     if (pp) pp.href = 'javascript:' + encodeURIComponent(getPayPeriodBookmarkletCode());
-    if (wx) wx.href = 'javascript:' + encodeURIComponent(getWxBookmarkletCode());
-    [bm, pp, wx].forEach(link => {
+    [bm, pp].forEach(link => {
       if (!link) return;
       link.addEventListener('mousedown', e => e.stopPropagation());
       link.addEventListener('dragstart', e => e.stopPropagation());
@@ -3298,8 +3264,8 @@
   }
 
   function copyBookmarkletUrl(which) {
-    const ids = { pp: 'ppBtn', wx: 'wxBmBtn', day: 'bmBtn' };
-    const makers = { pp: getPayPeriodBookmarkletCode, wx: getWxBookmarkletCode, day: getDayBookmarkletCode };
+    const ids = { pp: 'ppBtn', day: 'bmBtn' };
+    const makers = { pp: getPayPeriodBookmarkletCode, day: getDayBookmarkletCode };
     const link = document.getElementById(ids[which] || ids.day);
     const code = (makers[which] || makers.day)();
     const bookmarkletUrl = 'javascript:' + encodeURIComponent(code);
